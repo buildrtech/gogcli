@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- YouTube: preserve API-key authentication when wrapping requests with the retry transport, so public `youtube`/`yt` reads no longer fail as unregistered callers. (#578) — thanks @adityarya24.
 - Docs: update OAuth success/accounts GitHub links to the `openclaw/gogcli` repository. (#561)
 
 ## 0.16.0 - 2026-05-10
