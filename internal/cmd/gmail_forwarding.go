@@ -120,7 +120,9 @@ func (c *GmailForwardingDeleteCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty forwardingEmail")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete gmail forwarding address %s", forwardingEmail)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.forwarding.delete", map[string]any{
+		"forwarding_email": forwardingEmail,
+	}, fmt.Sprintf("delete gmail forwarding address %s", forwardingEmail)); confirmErr != nil {
 		return confirmErr
 	}
 

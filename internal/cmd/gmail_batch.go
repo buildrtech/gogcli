@@ -34,7 +34,10 @@ func (c *GmailBatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("missing messageId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, "permanently delete gmail messages"); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.batch.delete", map[string]any{
+		"message_ids": ids,
+		"count":       len(ids),
+	}, "permanently delete gmail messages"); confirmErr != nil {
 		return confirmErr
 	}
 

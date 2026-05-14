@@ -243,7 +243,9 @@ func (c *ClassroomInvitationsDeleteCmd) Run(ctx context.Context, flags *RootFlag
 		return usage("empty invitationId")
 	}
 
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("delete invitation %s", invitationID)); err != nil {
+	if err := dryRunAndConfirmDestructive(ctx, flags, "classroom.invitations.delete", map[string]any{
+		"invitation_id": invitationID,
+	}, fmt.Sprintf("delete invitation %s", invitationID)); err != nil {
 		return err
 	}
 

@@ -220,9 +220,94 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			op:   "gmail.labels.modify",
 		},
 		{
+			name: "gmail batch delete",
+			args: []string{"gmail", "batch", "delete", "msg123", "msg456"},
+			op:   "gmail.batch.delete",
+		},
+		{
+			name: "gmail drafts delete",
+			args: []string{"gmail", "drafts", "delete", "draft123"},
+			op:   "gmail.drafts.delete",
+		},
+		{
+			name: "gmail filters delete",
+			args: []string{"gmail", "filters", "delete", "filter123"},
+			op:   "gmail.filters.delete",
+		},
+		{
+			name: "gmail sendas delete",
+			args: []string{"gmail", "sendas", "delete", "alias@example.com"},
+			op:   "gmail.sendas.delete",
+		},
+		{
+			name: "gmail forwarding delete",
+			args: []string{"gmail", "forwarding", "delete", "forward@example.com"},
+			op:   "gmail.forwarding.delete",
+		},
+		{
 			name: "gmail watch renew",
 			args: []string{"gmail", "watch", "renew", "--ttl", "1h"},
 			op:   "gmail.watch.renew",
+		},
+		{
+			name: "keep delete",
+			args: []string{"keep", "delete", "note123"},
+			op:   "keep.delete",
+		},
+		{
+			name: "tasks delete",
+			args: []string{"tasks", "delete", "list123", "task123"},
+			op:   "tasks.delete",
+		},
+		{
+			name: "tasks clear",
+			args: []string{"tasks", "clear", "list123"},
+			op:   "tasks.clear",
+		},
+		{
+			name: "classroom topics delete",
+			args: []string{"classroom", "topics", "delete", "course123", "topic123"},
+			op:   "classroom.topics.delete",
+		},
+		{
+			name: "classroom coursework delete",
+			args: []string{"classroom", "coursework", "delete", "course123", "work123"},
+			op:   "classroom.coursework.delete",
+		},
+		{
+			name: "classroom materials delete",
+			args: []string{"classroom", "materials", "delete", "course123", "material123"},
+			op:   "classroom.materials.delete",
+		},
+		{
+			name: "classroom announcements delete",
+			args: []string{"classroom", "announcements", "delete", "course123", "announcement123"},
+			op:   "classroom.announcements.delete",
+		},
+		{
+			name: "classroom courses delete",
+			args: []string{"classroom", "courses", "delete", "course123"},
+			op:   "classroom.courses.delete",
+		},
+		{
+			name: "classroom courses leave",
+			args: []string{"classroom", "courses", "leave", "course123", "--role", "student", "--user", "student@example.com"},
+			op:   "classroom.courses.leave",
+		},
+		{
+			name: "classroom students remove",
+			args: []string{"classroom", "students", "remove", "course123", "student@example.com"},
+			op:   "classroom.students.remove",
+		},
+		{
+			name: "classroom teachers remove",
+			args: []string{"classroom", "teachers", "remove", "course123", "teacher@example.com"},
+			op:   "classroom.teachers.remove",
+		},
+		{
+			name: "classroom invitations delete",
+			args: []string{"classroom", "invitations", "delete", "invitation123"},
+			op:   "classroom.invitations.delete",
 		},
 		{
 			name: "meet update",

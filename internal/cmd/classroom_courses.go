@@ -340,7 +340,9 @@ func (c *ClassroomCoursesDeleteCmd) Run(ctx context.Context, flags *RootFlags) e
 		return usage("empty courseId")
 	}
 
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("delete course %s", courseID)); err != nil {
+	if err := dryRunAndConfirmDestructive(ctx, flags, "classroom.courses.delete", map[string]any{
+		"course_id": courseID,
+	}, fmt.Sprintf("delete course %s", courseID)); err != nil {
 		return err
 	}
 
@@ -518,7 +520,11 @@ func (c *ClassroomCoursesLeaveCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty user")
 	}
 
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("remove %s %s from course %s", role, userID, courseID)); err != nil {
+	if err := dryRunAndConfirmDestructive(ctx, flags, "classroom.courses.leave", map[string]any{
+		"course_id": courseID,
+		"role":      role,
+		"user_id":   userID,
+	}, fmt.Sprintf("remove %s %s from course %s", role, userID, courseID)); err != nil {
 		return err
 	}
 

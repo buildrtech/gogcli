@@ -217,7 +217,10 @@ func (c *ClassroomTopicsDeleteCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty topicId")
 	}
 
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("delete topic %s from %s", topicID, courseID)); err != nil {
+	if err := dryRunAndConfirmDestructive(ctx, flags, "classroom.topics.delete", map[string]any{
+		"course_id": courseID,
+		"topic_id":  topicID,
+	}, fmt.Sprintf("delete topic %s from %s", topicID, courseID)); err != nil {
 		return err
 	}
 

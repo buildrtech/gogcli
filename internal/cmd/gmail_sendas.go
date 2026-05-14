@@ -224,7 +224,9 @@ func (c *GmailSendAsDeleteCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return errors.New("email is required")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete gmail send-as alias %s", sendAsEmail)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.sendas.delete", map[string]any{
+		"email": sendAsEmail,
+	}, fmt.Sprintf("delete gmail send-as alias %s", sendAsEmail)); confirmErr != nil {
 		return confirmErr
 	}
 

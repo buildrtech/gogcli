@@ -664,7 +664,10 @@ func (c *TasksDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty taskId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete task %s from list %s", taskID, tasklistID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "tasks.delete", map[string]any{
+		"tasklist_id": tasklistID,
+		"task_id":     taskID,
+	}, fmt.Sprintf("delete task %s from list %s", taskID, tasklistID)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -702,7 +705,9 @@ func (c *TasksClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty tasklistId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("clear completed tasks from list %s", tasklistID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "tasks.clear", map[string]any{
+		"tasklist_id": tasklistID,
+	}, fmt.Sprintf("clear completed tasks from list %s", tasklistID)); confirmErr != nil {
 		return confirmErr
 	}
 

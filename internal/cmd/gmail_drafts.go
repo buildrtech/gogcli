@@ -189,7 +189,9 @@ func (c *GmailDraftsDeleteCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return usage("empty draftId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete gmail draft %s", draftID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.drafts.delete", map[string]any{
+		"draft_id": draftID,
+	}, fmt.Sprintf("delete gmail draft %s", draftID)); confirmErr != nil {
 		return confirmErr
 	}
 

@@ -318,7 +318,10 @@ func (c *ClassroomMaterialsDeleteCmd) Run(ctx context.Context, flags *RootFlags)
 		return usage("empty materialId")
 	}
 
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("delete material %s from %s", materialID, courseID)); err != nil {
+	if err := dryRunAndConfirmDestructive(ctx, flags, "classroom.materials.delete", map[string]any{
+		"course_id":   courseID,
+		"material_id": materialID,
+	}, fmt.Sprintf("delete material %s from %s", materialID, courseID)); err != nil {
 		return err
 	}
 

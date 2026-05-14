@@ -393,7 +393,9 @@ func (c *KeepDeleteCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 		name = "notes/" + name
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete note %s", name)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "keep.delete", map[string]any{
+		"name": name,
+	}, fmt.Sprintf("delete note %s", name)); confirmErr != nil {
 		return confirmErr
 	}
 

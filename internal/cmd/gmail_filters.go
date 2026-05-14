@@ -114,7 +114,9 @@ func (c *GmailFiltersDeleteCmd) Run(ctx context.Context, flags *RootFlags) error
 		return usage("empty filterId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete gmail filter %s", filterID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.filters.delete", map[string]any{
+		"filter_id": filterID,
+	}, fmt.Sprintf("delete gmail filter %s", filterID)); confirmErr != nil {
 		return confirmErr
 	}
 
