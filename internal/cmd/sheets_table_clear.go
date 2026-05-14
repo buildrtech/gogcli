@@ -19,11 +19,6 @@ type SheetsTableClearCmd struct {
 
 func (c *SheetsTableClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	spreadsheetID := normalizeGoogleID(strings.TrimSpace(c.SpreadsheetID))
 	in := strings.TrimSpace(c.TableID)
 	if spreadsheetID == "" {
@@ -31,6 +26,18 @@ func (c *SheetsTableClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 	if in == "" {
 		return usage("empty tableId")
+	}
+
+	if dryRunErr := dryRunExit(ctx, flags, "sheets.table.clear", map[string]any{
+		"spreadsheet_id":   spreadsheetID,
+		"table_id_or_name": in,
+	}); dryRunErr != nil {
+		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newSheetsService(ctx, account)
@@ -54,15 +61,6 @@ func (c *SheetsTableClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return fmt.Errorf("table %q has no data rows to clear", table.TableID)
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "sheets.table.clear", map[string]any{
-		"spreadsheet_id": spreadsheetID,
-		"table_id":       table.TableID,
-		"name":           table.Name,
-		"data_range":     dataRange,
-		"has_footer":     table.HasFooter,
-	}); dryRunErr != nil {
-		return dryRunErr
-	}
 	if flags == nil || !flags.Force {
 		return usage("sheets table clear requires --force")
 	}

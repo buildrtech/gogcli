@@ -26,10 +26,6 @@ type SlidesCreateFromTemplateCmd struct {
 
 func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 
 	templateID := normalizeGoogleID(strings.TrimSpace(c.TemplateID))
 	if templateID == "" {
@@ -60,6 +56,11 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 		"replacements": replacements,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	// Create Drive service to copy the template

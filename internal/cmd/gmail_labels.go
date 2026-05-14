@@ -411,6 +411,16 @@ type GmailLabelsDeleteCmd struct {
 
 func (c *GmailLabelsDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	raw := strings.TrimSpace(c.Label)
+	if raw == "" {
+		return usage("label is required")
+	}
+	if dryRunErr := dryRunExit(ctx, flags, "gmail.labels.delete", map[string]any{
+		"label": raw,
+	}); dryRunErr != nil {
+		return dryRunErr
+	}
+
 	account, err := requireAccount(flags)
 	if err != nil {
 		return err

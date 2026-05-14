@@ -26,11 +26,6 @@ func (c *CalendarCreateCalendarCmd) Run(ctx context.Context, flags *RootFlags) e
 		return usage("required: calendar name (positional argument)")
 	}
 
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	cal := &calendar.Calendar{
 		Summary:     summary,
 		Description: strings.TrimSpace(c.Description),
@@ -47,6 +42,11 @@ func (c *CalendarCreateCalendarCmd) Run(ctx context.Context, flags *RootFlags) e
 		"calendar": cal,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newCalendarService(ctx, account)

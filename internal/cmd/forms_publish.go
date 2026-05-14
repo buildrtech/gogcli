@@ -45,10 +45,6 @@ type formPublishStateRequest struct {
 }
 
 func setFormPublishState(ctx context.Context, flags *RootFlags, publishReq formPublishStateRequest) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(publishReq.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -60,6 +56,11 @@ func setFormPublishState(ctx context.Context, flags *RootFlags, publishReq formP
 		"accepting_responses": publishReq.AcceptingResponses,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newFormsService(ctx, account)

@@ -41,6 +41,16 @@ func (c *SheetsTableAppendCmd) Run(ctx context.Context, flags *RootFlags) error 
 		valueInputOption = sheetsDefaultValueInputOption
 	}
 
+	if dryRunErr := dryRunExit(ctx, flags, "sheets.table.append", map[string]any{
+		"spreadsheet_id":     spreadsheetID,
+		"table_id_or_name":   in,
+		"values":             values,
+		"value_input_option": valueInputOption,
+		"insert_data_option": "INSERT_ROWS",
+	}); dryRunErr != nil {
+		return dryRunErr
+	}
+
 	account, err := requireAccount(flags)
 	if err != nil {
 		return err
@@ -67,18 +77,6 @@ func (c *SheetsTableAppendCmd) Run(ctx context.Context, flags *RootFlags) error 
 	}
 	if widthErr := validateSheetsTableAppendWidth(table, values); widthErr != nil {
 		return widthErr
-	}
-
-	if dryRunErr := dryRunExit(ctx, flags, "sheets.table.append", map[string]any{
-		"spreadsheet_id":     spreadsheetID,
-		"table_id":           table.TableID,
-		"name":               table.Name,
-		"range":              table.A1,
-		"values":             values,
-		"value_input_option": valueInputOption,
-		"insert_data_option": "INSERT_ROWS",
-	}); dryRunErr != nil {
-		return dryRunErr
 	}
 
 	resp, err := svc.Spreadsheets.Values.Append(spreadsheetID, table.A1, &sheets.ValueRange{Values: values}).

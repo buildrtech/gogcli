@@ -194,10 +194,6 @@ type AppScriptCreateCmd struct {
 }
 
 func (c *AppScriptCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	title := strings.TrimSpace(c.Title)
 	if title == "" {
 		return usage("empty --title")
@@ -209,6 +205,11 @@ func (c *AppScriptCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		"parent_id": parentID,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newAppScriptService(ctx, account)

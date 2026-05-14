@@ -332,10 +332,6 @@ type FormsMoveQuestionCmd struct {
 }
 
 func (c *FormsMoveQuestionCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -350,6 +346,11 @@ func (c *FormsMoveQuestionCmd) Run(ctx context.Context, flags *RootFlags) error 
 		"new_index": c.NewIndex,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newFormsService(ctx, account)

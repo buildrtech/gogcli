@@ -27,10 +27,6 @@ type FormsWatchCreateCmd struct {
 }
 
 func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -46,6 +42,11 @@ func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		"event_type": c.EventType,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newFormsService(ctx, account)
@@ -143,10 +144,6 @@ type FormsWatchDeleteCmd struct {
 }
 
 func (c *FormsWatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -161,6 +158,11 @@ func (c *FormsWatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		"watch_id": watchID,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newFormsService(ctx, account)
@@ -194,10 +196,6 @@ type FormsWatchRenewCmd struct {
 }
 
 func (c *FormsWatchRenewCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -212,6 +210,11 @@ func (c *FormsWatchRenewCmd) Run(ctx context.Context, flags *RootFlags) error {
 		"watch_id": watchID,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newFormsService(ctx, account)

@@ -150,11 +150,6 @@ type SheetsNamedRangesAddCmd struct {
 
 func (c *SheetsNamedRangesAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	spreadsheetID := normalizeGoogleID(strings.TrimSpace(c.SpreadsheetID))
 	name := strings.TrimSpace(c.Name)
 	rangeSpec := cleanRange(strings.TrimSpace(c.Range))
@@ -167,6 +162,9 @@ func (c *SheetsNamedRangesAddCmd) Run(ctx context.Context, flags *RootFlags) err
 	if rangeSpec == "" {
 		return usage("empty range")
 	}
+	if _, err := parseSheetRange(rangeSpec, "range"); err != nil {
+		return err
+	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "sheets.named_ranges.add", map[string]any{
 		"spreadsheet_id": spreadsheetID,
@@ -174,6 +172,11 @@ func (c *SheetsNamedRangesAddCmd) Run(ctx context.Context, flags *RootFlags) err
 		"range":          rangeSpec,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newSheetsService(ctx, account)
@@ -238,11 +241,6 @@ type SheetsNamedRangesUpdateCmd struct {
 
 func (c *SheetsNamedRangesUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	spreadsheetID := normalizeGoogleID(strings.TrimSpace(c.SpreadsheetID))
 	in := strings.TrimSpace(c.NameOrID)
 	newName := strings.TrimSpace(c.NewName)
@@ -256,6 +254,11 @@ func (c *SheetsNamedRangesUpdateCmd) Run(ctx context.Context, flags *RootFlags) 
 	if newName == "" && newRangeSpec == "" {
 		return usage("provide --name and/or --range")
 	}
+	if newRangeSpec != "" {
+		if _, err := parseSheetRange(newRangeSpec, "range"); err != nil {
+			return err
+		}
+	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "sheets.named_ranges.update", map[string]any{
 		"spreadsheet_id": spreadsheetID,
@@ -264,6 +267,11 @@ func (c *SheetsNamedRangesUpdateCmd) Run(ctx context.Context, flags *RootFlags) 
 		"range":          newRangeSpec,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newSheetsService(ctx, account)
@@ -349,11 +357,6 @@ type SheetsNamedRangesDeleteCmd struct {
 
 func (c *SheetsNamedRangesDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	spreadsheetID := normalizeGoogleID(strings.TrimSpace(c.SpreadsheetID))
 	in := strings.TrimSpace(c.NameOrID)
 	if spreadsheetID == "" {
@@ -368,6 +371,11 @@ func (c *SheetsNamedRangesDeleteCmd) Run(ctx context.Context, flags *RootFlags) 
 		"name_or_id":     in,
 	}); dryRunErr != nil {
 		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newSheetsService(ctx, account)

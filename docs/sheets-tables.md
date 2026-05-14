@@ -114,7 +114,8 @@ clear range. If Sheets reports a footer row, `gog` skips the footer row too and
 clears only the rows between header and footer.
 
 Header-only tables fail with a clear message instead of sending an empty or
-header-touching mutation. Use `--dry-run --json` to preview the exact data range:
+header-touching mutation. Use `--dry-run --json` to preview the requested table
+clear without touching auth or the Sheets API:
 
 ```bash
 gog sheets table clear "$spreadsheet_id" Tasks --dry-run --json

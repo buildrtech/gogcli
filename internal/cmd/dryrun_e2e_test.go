@@ -38,6 +38,41 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			op:   "drive.rename",
 		},
 		{
+			name: "calendar create-calendar",
+			args: []string{"calendar", "create-calendar", "SmokeCal", "--timezone", "UTC"},
+			op:   "calendar.create-calendar",
+		},
+		{
+			name: "forms create",
+			args: []string{"forms", "create", "--title", "SmokeForm"},
+			op:   "forms.create",
+		},
+		{
+			name: "forms publish",
+			args: []string{"forms", "publish", "form123"},
+			op:   "forms.publish",
+		},
+		{
+			name: "forms watch create",
+			args: []string{"forms", "watch", "create", "form123", "--topic", "projects/p/topics/t"},
+			op:   "forms.watches.create",
+		},
+		{
+			name: "forms watch delete",
+			args: []string{"forms", "watch", "delete", "form123", "watch123"},
+			op:   "forms.watches.delete",
+		},
+		{
+			name: "forms watch renew",
+			args: []string{"forms", "watch", "renew", "form123", "watch123"},
+			op:   "forms.watches.renew",
+		},
+		{
+			name: "forms move question",
+			args: []string{"forms", "move-question", "form123", "0", "1"},
+			op:   "forms.moveQuestion",
+		},
+		{
 			name: "gmail label rename",
 			args: []string{"gmail", "labels", "rename", "Label_1", "NewLabel"},
 			op:   "gmail.labels.rename",
@@ -46,6 +81,11 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			name: "gmail label style",
 			args: []string{"gmail", "labels", "style", "Label_1", "--background-color", "#ffffff", "--text-color", "#000000"},
 			op:   "gmail.labels.style",
+		},
+		{
+			name: "gmail label delete",
+			args: []string{"gmail", "labels", "delete", "Label_1"},
+			op:   "gmail.labels.delete",
 		},
 		{
 			name: "meet update",
@@ -61,6 +101,16 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			name: "slides create",
 			args: []string{"slides", "create", "SmokeSlides"},
 			op:   "slides.create",
+		},
+		{
+			name: "slides create from template",
+			args: []string{"slides", "create-from-template", "template123", "SmokeSlides", "--replace", "NAME=World"},
+			op:   "slides.create-from-template",
+		},
+		{
+			name: "appscript create",
+			args: []string{"appscript", "create", "--title", "SmokeScript"},
+			op:   "appscript.create",
 		},
 		{
 			name: "sheets banding clear all",
@@ -83,6 +133,31 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			op:   "sheets.table.delete",
 		},
 		{
+			name: "sheets table append",
+			args: []string{"sheets", "table", "append", "sheet123", "Tbl", "a|b"},
+			op:   "sheets.table.append",
+		},
+		{
+			name: "sheets table clear",
+			args: []string{"sheets", "table", "clear", "sheet123", "Tbl"},
+			op:   "sheets.table.clear",
+		},
+		{
+			name: "sheets named ranges add",
+			args: []string{"sheets", "named-ranges", "add", "sheet123", "MyRange", "Sheet1!A1:B2"},
+			op:   "sheets.named_ranges.add",
+		},
+		{
+			name: "sheets named ranges update",
+			args: []string{"sheets", "named-ranges", "update", "sheet123", "range123", "--name", "NewRange"},
+			op:   "sheets.named_ranges.update",
+		},
+		{
+			name: "sheets named ranges delete",
+			args: []string{"sheets", "named-ranges", "delete", "sheet123", "range123"},
+			op:   "sheets.named_ranges.delete",
+		},
+		{
 			name: "forms delete question",
 			args: []string{"forms", "delete-question", "form123", "0"},
 			op:   "forms.deleteQuestion",
@@ -92,13 +167,17 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"--json", "--dry-run", "--no-input", "--access-token", "invalid-token"}, tc.args...)
+			var stderr string
 			out := captureStdout(t, func() {
-				_ = captureStderr(t, func() {
+				stderr = captureStderr(t, func() {
 					if err := Execute(args); err != nil && ExitCode(err) != 0 {
 						t.Fatalf("Execute: %v", err)
 					}
 				})
 			})
+			if stderr != "" {
+				t.Fatalf("dry-run touched auth/API stderr: %q", stderr)
+			}
 
 			var payload struct {
 				DryRun bool   `json:"dry_run"`
