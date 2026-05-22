@@ -185,6 +185,43 @@ func TestLoadConfigLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestLoadConfigSkipsLegacyFallbackWithExplicitGOGHome(t *testing.T) {
+	setupTrackingConfigEnv(t)
+	t.Setenv("GOG_HOME", filepath.Join(t.TempDir(), "isolated"))
+
+	legacy, err := legacyConfigPath()
+	if err != nil {
+		t.Fatalf("legacyConfigPath: %v", err)
+	}
+
+	if err = os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatalf("mkdir legacy: %v", err)
+	}
+
+	payload, err := json.Marshal(&Config{
+		Enabled:     true,
+		WorkerURL:   "https://legacy.example.com",
+		TrackingKey: "track",
+		AdminKey:    "admin",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if err = os.WriteFile(legacy, payload, 0o600); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	cfg, err := LoadConfig("a@b.com")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if cfg.Enabled || cfg.WorkerURL != "" {
+		t.Fatalf("loaded legacy config despite explicit GOG_HOME: %#v", cfg)
+	}
+}
+
 func TestLegacyConfigPathUsesXDGConfigHome(t *testing.T) {
 	setupTrackingConfigEnv(t)
 
@@ -195,6 +232,24 @@ func TestLegacyConfigPathUsesXDGConfigHome(t *testing.T) {
 
 	if !strings.Contains(path, filepath.Join("xdg", "gog", "tracking.json")) {
 		t.Fatalf("expected XDG-based legacy path, got %q", path)
+	}
+}
+
+func TestLegacyConfigPathIgnoresRelativeXDGConfigHome(t *testing.T) {
+	setupTrackingConfigEnv(t)
+	t.Setenv("XDG_CONFIG_HOME", "relative-xdg")
+
+	path, err := legacyConfigPath()
+	if err != nil {
+		t.Fatalf("legacyConfigPath: %v", err)
+	}
+
+	if !filepath.IsAbs(path) {
+		t.Fatalf("expected absolute legacy path, got %q", path)
+	}
+
+	if strings.Contains(path, "relative-xdg") {
+		t.Fatalf("expected relative XDG_CONFIG_HOME to be ignored, got %q", path)
 	}
 }
 

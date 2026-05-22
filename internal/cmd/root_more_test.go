@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -74,6 +75,113 @@ func TestHelpDescription(t *testing.T) {
 	}
 	if !strings.Contains(out, "keyring backend: auto") {
 		t.Fatalf("expected keyring backend line, got: %q", out)
+	}
+}
+
+func TestRootHomeFlagOverridesPathRoot(t *testing.T) {
+	setTestConfigHome(t)
+	home := t.TempDir()
+
+	out := captureStdout(t, func() {
+		if err := Execute([]string{"--json", "--home", home, "config", "path"}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+	})
+	var payload struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal config path: %v\n%s", err, out)
+	}
+	assertPathUnderRoot(t, payload.Path, home, "config", "config.json")
+}
+
+func TestRootHomeFlagOverridesHelpDescription(t *testing.T) {
+	setTestConfigHome(t)
+	home := t.TempDir()
+
+	out := captureStdout(t, func() {
+		if err := Execute([]string{"--home", home, "--help"}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+	})
+	path := helpConfigPath(out)
+	if path == "" {
+		t.Fatalf("expected help config path, got %s", out)
+	}
+	assertPathUnderRoot(t, path, home, "config", "config.json")
+}
+
+func TestRootHomeFlagAppliesBeforeSubcommandHelp(t *testing.T) {
+	setTestConfigHome(t)
+
+	err := Execute([]string{"config", "--home", "relative", "--help"})
+	if err == nil || !strings.Contains(err.Error(), "--home") {
+		t.Fatalf("expected --home error, got %v", err)
+	}
+}
+
+func helpConfigPath(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "file: ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "file: "))
+		}
+	}
+	return ""
+}
+
+func assertPathUnderRoot(t *testing.T, got, root string, elems ...string) {
+	t.Helper()
+
+	cleanGot := filepath.Clean(got)
+	if !strings.HasSuffix(cleanGot, filepath.Join(elems...)) {
+		t.Fatalf("expected path with suffix %q, got %q", filepath.Join(elems...), got)
+	}
+
+	gotRoot := cleanGot
+	for range elems {
+		gotRoot = filepath.Dir(gotRoot)
+	}
+	if samePath(gotRoot, root) {
+		return
+	}
+	t.Fatalf("expected path root %q, got %q from path %q", root, gotRoot, got)
+}
+
+func samePath(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if aEval, err := filepath.EvalSymlinks(a); err == nil {
+		a = filepath.Clean(aEval)
+	}
+	if bEval, err := filepath.EvalSymlinks(b); err == nil {
+		b = filepath.Clean(bEval)
+	}
+	return strings.EqualFold(a, b)
+}
+
+func TestRootHomePreScanSkipsGlobalFlagValues(t *testing.T) {
+	if home, ok := preScanHomeArg([]string{"--account", "--home", "config", "path"}); ok {
+		t.Fatalf("unexpected home override %q", home)
+	}
+
+	home, ok := preScanHomeArg([]string{"--account", "user@example.com", "--home=/tmp/gog", "config", "path"})
+	if !ok || home != "/tmp/gog" {
+		t.Fatalf("home=%q ok=%t, want /tmp/gog true", home, ok)
+	}
+
+	home, ok = preScanHomeArg([]string{"config", "--home", "/tmp/gog", "--help"})
+	if !ok || home != "/tmp/gog" {
+		t.Fatalf("home=%q ok=%t, want /tmp/gog true", home, ok)
+	}
+}
+
+func TestRootHomeFlagRejectsRelativePath(t *testing.T) {
+	setTestConfigHome(t)
+	err := Execute([]string{"--home", "relative", "config", "path"})
+	if err == nil || !strings.Contains(err.Error(), "--home") {
+		t.Fatalf("expected --home error, got %v", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +43,15 @@ type fileConfig struct {
 
 // ConfigPath returns the path to the tracking config file.
 func ConfigPath() (string, error) {
+	dir, err := config.StateDir()
+	if err != nil {
+		return "", fmt.Errorf("state dir: %w", err)
+	}
+
+	return filepath.Join(dir, "tracking.json"), nil
+}
+
+func previousConfigPath() (string, error) {
 	dir, err := config.Dir()
 	if err != nil {
 		return "", fmt.Errorf("config dir: %w", err)
@@ -52,7 +62,18 @@ func ConfigPath() (string, error) {
 
 func legacyConfigPath() (string, error) {
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
-		return filepath.Join(xdg, "gog", "tracking.json"), nil
+		if filepath.IsAbs(xdg) {
+			return filepath.Join(xdg, "gog", "tracking.json"), nil
+		}
+
+		if usesXDGConfigDefault() {
+			configDir, err := homeConfigDir()
+			if err != nil {
+				return "", err
+			}
+
+			return filepath.Join(configDir, "gog", "tracking.json"), nil
+		}
 	}
 
 	configDir, err := os.UserConfigDir()
@@ -60,7 +81,34 @@ func legacyConfigPath() (string, error) {
 		return "", fmt.Errorf("user config dir: %w", err)
 	}
 
+	if !filepath.IsAbs(configDir) {
+		var homeErr error
+
+		configDir, homeErr = homeConfigDir()
+		if homeErr != nil {
+			return "", homeErr
+		}
+	}
+
 	return filepath.Join(configDir, "gog", "tracking.json"), nil
+}
+
+func usesXDGConfigDefault() bool {
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly":
+		return true
+	default:
+		return false
+	}
+}
+
+func homeConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home config dir: %w", err)
+	}
+
+	return filepath.Join(home, ".config"), nil
 }
 
 func readConfigBytes(path string) ([]byte, bool, error) {
@@ -74,28 +122,38 @@ func readConfigBytes(path string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("read tracking config: %w", readErr)
 	}
 
-	legacyPath, legacyErr := legacyConfigPath()
-	if legacyErr != nil {
-		return nil, false, fmt.Errorf("legacy config path: %w", legacyErr)
-	}
-
-	// #nosec G304 -- path is derived from user config dir
-	legacyData, legacyReadErr := os.ReadFile(legacyPath)
-	if legacyReadErr == nil {
-		return legacyData, true, nil
-	}
-
-	if os.IsNotExist(legacyReadErr) {
+	if config.HasExplicitStateOverride() {
 		return nil, false, nil
 	}
 
-	return nil, false, fmt.Errorf("read legacy tracking config: %w", legacyReadErr)
+	for _, fallbackPathFn := range []func() (string, error){previousConfigPath, legacyConfigPath} {
+		legacyPath, legacyErr := fallbackPathFn()
+		if legacyErr != nil {
+			return nil, false, fmt.Errorf("legacy config path: %w", legacyErr)
+		}
+
+		if legacyPath == path {
+			continue
+		}
+
+		// #nosec G304 -- path is derived from user config dir
+		legacyData, legacyReadErr := os.ReadFile(legacyPath)
+		if legacyReadErr == nil {
+			return legacyData, true, nil
+		}
+
+		if !os.IsNotExist(legacyReadErr) {
+			return nil, false, fmt.Errorf("read legacy tracking config: %w", legacyReadErr)
+		}
+	}
+
+	return nil, false, nil
 }
 
 func trackingConfigLockPath() (string, error) {
-	dir, err := config.EnsureDir()
+	dir, err := config.EnsureStateDir()
 	if err != nil {
-		return "", fmt.Errorf("ensure config dir: %w", err)
+		return "", fmt.Errorf("ensure state dir: %w", err)
 	}
 
 	return filepath.Join(dir, "tracking.lock"), nil
@@ -212,8 +270,8 @@ func SaveConfig(account string, cfg *Config) error {
 	fileCfg.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	// Ensure directory exists
-	if _, mkErr := config.EnsureDir(); mkErr != nil {
-		return fmt.Errorf("ensure config dir: %w", mkErr)
+	if _, mkErr := config.EnsureStateDir(); mkErr != nil {
+		return fmt.Errorf("ensure state dir: %w", mkErr)
 	}
 
 	data, err := json.MarshalIndent(fileCfg, "", "  ")
