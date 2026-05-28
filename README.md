@@ -1,6 +1,6 @@
-![gogcli banner](docs/assets/readme-banner.jpg)
-
 # gogcli
+
+![gogcli banner](docs/assets/readme-banner.jpg)
 
 `gog` is a script-friendly Google CLI for Gmail, Calendar, Drive, Docs, Sheets,
 Sites, Slides, Forms, Meet, Apps Script, Analytics, Search Console, Contacts,
