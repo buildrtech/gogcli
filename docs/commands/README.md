@@ -2,7 +2,7 @@
 
 Every `gog` command has a generated docs page. The source of truth is the live CLI schema; run `make docs-commands` after changing command names, flags, help text, aliases, or arguments.
 
-Generated pages: 574.
+Generated pages: 576.
 
 ## Top-level Commands
 
@@ -48,7 +48,7 @@ Generated pages: 574.
 - [gog upload](gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
 - [gog version](gog-version.md) - Print version
 - [gog whoami](gog-whoami.md) - Show your profile (alias for 'people me')
-- [gog youtube](gog-youtube.md) - YouTube Data API (activities, videos, playlists, comments, channels)
+- [gog youtube](gog-youtube.md) - YouTube Data API (search, activities, videos, playlists, comments, channels)
 - [gog zoom](gog-zoom.md) - Zoom
 
 ## All Commands
@@ -612,7 +612,7 @@ Generated pages: 574.
   - [gog upload](gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
   - [gog version](gog-version.md) - Print version
   - [gog whoami](gog-whoami.md) - Show your profile (alias for 'people me')
-  - [gog youtube](gog-youtube.md) - YouTube Data API (activities, videos, playlists, comments, channels)
+  - [gog youtube](gog-youtube.md) - YouTube Data API (search, activities, videos, playlists, comments, channels)
     - [gog youtube activities](gog-youtube-activities.md) - List channel activities
       - [gog youtube activities list](gog-youtube-activities-list.md) - List activities for a channel (or authenticated user)
     - [gog youtube channels](gog-youtube-channels.md) - List channels
@@ -621,6 +621,8 @@ Generated pages: 574.
       - [gog youtube comments list](gog-youtube-comments-list.md) - List comment threads for a video or channel
     - [gog youtube playlists](gog-youtube-playlists.md) - List playlists
       - [gog youtube playlists list](gog-youtube-playlists-list.md) - List playlists by channel or authenticated user
+    - [gog youtube search](gog-youtube-search.md) - Search YouTube for videos, channels, or playlists
+      - [gog youtube search list](gog-youtube-search-list.md) - Search for videos, channels, or playlists
     - [gog youtube videos](gog-youtube-videos.md) - List or get videos
       - [gog youtube videos list](gog-youtube-videos-list.md) - List videos by ID or chart
   - [gog zoom](gog-zoom.md) - Zoom

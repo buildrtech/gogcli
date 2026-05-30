@@ -561,7 +561,7 @@ Generated from `gog schema --json`.
   - [`gog upload (up,put) <localPath> [flags]`](commands/gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
   - [`gog version [flags]`](commands/gog-version.md) - Print version
   - [`gog whoami (who-am-i) [flags]`](commands/gog-whoami.md) - Show your profile (alias for 'people me')
-  - [`gog youtube (yt) <command> [flags]`](commands/gog-youtube.md) - YouTube Data API (activities, videos, playlists, comments, channels)
+  - [`gog youtube (yt) <command> [flags]`](commands/gog-youtube.md) - YouTube Data API (search, activities, videos, playlists, comments, channels)
     - [`gog youtube (yt) activities (activity) <command>`](commands/gog-youtube-activities.md) - List channel activities
       - [`gog youtube (yt) activities (activity) list (ls) [flags]`](commands/gog-youtube-activities-list.md) - List activities for a channel (or authenticated user)
     - [`gog youtube (yt) channels (channel) <command>`](commands/gog-youtube-channels.md) - List channels
@@ -570,6 +570,8 @@ Generated from `gog schema --json`.
       - [`gog youtube (yt) comments (comment) list (ls) [flags]`](commands/gog-youtube-comments-list.md) - List comment threads for a video or channel
     - [`gog youtube (yt) playlists (playlist) <command>`](commands/gog-youtube-playlists.md) - List playlists
       - [`gog youtube (yt) playlists (playlist) list (ls) [flags]`](commands/gog-youtube-playlists-list.md) - List playlists by channel or authenticated user
+    - [`gog youtube (yt) search (find) <command>`](commands/gog-youtube-search.md) - Search YouTube for videos, channels, or playlists
+      - [`gog youtube (yt) search (find) list (ls) <query> [flags]`](commands/gog-youtube-search-list.md) - Search for videos, channels, or playlists
     - [`gog youtube (yt) videos (video) <command>`](commands/gog-youtube-videos.md) - List or get videos
       - [`gog youtube (yt) videos (video) list (ls) [flags]`](commands/gog-youtube-videos-list.md) - List videos by ID or chart
   - [`gog zoom <command> [flags]`](commands/gog-zoom.md) - Zoom
