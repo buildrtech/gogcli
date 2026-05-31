@@ -106,7 +106,7 @@ func normalizeCalendarEventsArgs(args []string) (string, error) {
 			trimmed = append(trimmed, arg)
 		}
 	}
-	if len(trimmed) > 0 && (trimmed[0] == "list" || trimmed[0] == "ls") {
+	if len(trimmed) > 0 && (trimmed[0] == strList || trimmed[0] == "ls") {
 		trimmed = trimmed[1:]
 	}
 	if len(trimmed) > 1 {
