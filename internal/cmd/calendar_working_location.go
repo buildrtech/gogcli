@@ -42,7 +42,7 @@ func (c *CalendarWorkingLocationCmd) Run(ctx context.Context, flags *RootFlags) 
 		WorkingLocationProperties: props,
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "calendar.working_location", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "calendar.working-location", map[string]any{
 		"calendar_id": calendarID,
 		"event":       event,
 	}); dryRunErr != nil {

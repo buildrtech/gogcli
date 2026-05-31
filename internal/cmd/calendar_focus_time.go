@@ -48,7 +48,7 @@ func (c *CalendarFocusTimeCmd) Run(ctx context.Context, flags *RootFlags) error 
 		Recurrence: buildRecurrence(c.Recurrence),
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "calendar.focus_time", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "calendar.focus-time", map[string]any{
 		"calendar_id": calendarID,
 		"event":       event,
 	}); dryRunErr != nil {

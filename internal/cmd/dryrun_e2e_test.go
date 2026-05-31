@@ -212,9 +212,14 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			op:   "auth.tokens.import",
 		},
 		{
+			name: "auth service account set",
+			args: []string{"auth", "service-account", "set", "user@example.com", "--key", serviceAccountPath},
+			op:   "auth.service-account.set",
+		},
+		{
 			name: "auth service account unset",
 			args: []string{"auth", "service-account", "unset", "user@example.com"},
-			op:   "auth.service_account.unset",
+			op:   "auth.service-account.unset",
 		},
 		{
 			name: "auth keep",
@@ -272,9 +277,44 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 			op:   "calendar.subscribe",
 		},
 		{
+			name: "calendar focus time",
+			args: []string{"calendar", "focus-time", "primary", "--from", "2030-01-01T10:00:00Z", "--to", "2030-01-01T11:00:00Z"},
+			op:   "calendar.focus-time",
+		},
+		{
+			name: "calendar out of office",
+			args: []string{"calendar", "out-of-office", "primary", "--from", "2030-01-01T10:00:00Z", "--to", "2030-01-01T11:00:00Z"},
+			op:   "calendar.out-of-office",
+		},
+		{
+			name: "calendar working location",
+			args: []string{"calendar", "working-location", "primary", "--from", "2030-01-01", "--to", "2030-01-02", "--type", "home"},
+			op:   "calendar.working-location",
+		},
+		{
+			name: "calendar propose time",
+			args: []string{"calendar", "propose-time", "primary", "event123", "--comment", "not this time"},
+			op:   "calendar.propose-time",
+		},
+		{
+			name: "calendar respond",
+			args: []string{"calendar", "respond", "primary", "event123", "--status", "accepted"},
+			op:   "calendar.respond",
+		},
+		{
+			name: "calendar move",
+			args: []string{"calendar", "move", "primary", "event123", "other@example.com"},
+			op:   "calendar.move",
+		},
+		{
 			name: "forms create",
 			args: []string{"forms", "create", "--title", "SmokeForm"},
 			op:   "forms.create",
+		},
+		{
+			name: "forms add question",
+			args: []string{"forms", "add-question", "form123", "--title", "Question", "--type", "text"},
+			op:   "forms.add-question",
 		},
 		{
 			name: "forms publish",
@@ -299,7 +339,7 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 		{
 			name: "forms move question",
 			args: []string{"forms", "move-question", "form123", "0", "1"},
-			op:   "forms.moveQuestion",
+			op:   "forms.move-question",
 		},
 		{
 			name: "gmail label rename",
@@ -454,7 +494,7 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 		{
 			name: "meet end",
 			args: []string{"meet", "end", "abc-defg-hij"},
-			op:   "meet.spaces.end_active_conference",
+			op:   "meet.end",
 		},
 		{
 			name: "slides create",
@@ -549,17 +589,17 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 		{
 			name: "sheets named ranges add",
 			args: []string{"sheets", "named-ranges", "add", "sheet123", "MyRange", "Sheet1!A1:B2"},
-			op:   "sheets.named_ranges.add",
+			op:   "sheets.named-ranges.add",
 		},
 		{
 			name: "sheets named ranges update",
 			args: []string{"sheets", "named-ranges", "update", "sheet123", "range123", "--name", "NewRange"},
-			op:   "sheets.named_ranges.update",
+			op:   "sheets.named-ranges.update",
 		},
 		{
 			name: "sheets named ranges delete",
 			args: []string{"sheets", "named-ranges", "delete", "sheet123", "range123"},
-			op:   "sheets.named_ranges.delete",
+			op:   "sheets.named-ranges.delete",
 		},
 		{
 			name: "sheets delete tab",
@@ -569,7 +609,7 @@ func TestDryRunE2E_MutatingCommandsSkipAuthAndAPI(t *testing.T) {
 		{
 			name: "forms delete question",
 			args: []string{"forms", "delete-question", "form123", "0"},
-			op:   "forms.deleteQuestion",
+			op:   "forms.delete-question",
 		},
 	}
 

@@ -54,7 +54,7 @@ func (c *FormsAddQuestionCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "forms.addQuestion", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "forms.add-question", map[string]any{
 		"form_id":     formID,
 		"title":       title,
 		"type":        qType,
@@ -266,7 +266,7 @@ func (c *FormsDeleteQuestionCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return usage("index must be >= 0")
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "forms.deleteQuestion", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "forms.delete-question", map[string]any{
 		"form_id": formID,
 		"index":   c.Index,
 	}); dryRunErr != nil {
@@ -340,7 +340,7 @@ func (c *FormsMoveQuestionCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return usage("indices must be >= 0")
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "forms.moveQuestion", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "forms.move-question", map[string]any{
 		"form_id":   formID,
 		"old_index": c.OldIndex,
 		"new_index": c.NewIndex,

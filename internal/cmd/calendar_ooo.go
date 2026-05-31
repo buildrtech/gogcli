@@ -45,7 +45,7 @@ func (c *CalendarOOOCmd) Run(ctx context.Context, flags *RootFlags) error {
 		},
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "calendar.out_of_office", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "calendar.out-of-office", map[string]any{
 		"calendar_id": calendarID,
 		"event":       event,
 	}); dryRunErr != nil {
