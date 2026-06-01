@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,6 +42,23 @@ func TestGmailFiltersCreate_Forward_NoInputRequiresForce(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "refusing to create gmail filter forwarding") {
 		t.Fatalf("expected refusing error, got %v", err)
 	}
+}
+
+func TestGmailFiltersCreate_InvalidForwardFailsBeforeDryRun(t *testing.T) {
+	origNew := newGmailService
+	t.Cleanup(func() { newGmailService = origNew })
+	newGmailService = func(context.Context, string) (*gmail.Service, error) {
+		t.Fatalf("expected validation to fail before creating gmail service")
+		return nil, errors.New("unexpected gmail service call")
+	}
+
+	_ = captureStderr(t, func() {
+		err := Execute([]string{"--account", "a@b.com", "--dry-run", "gmail", "filters", "create", "--from", "a@example.com", "--forward", "nope"})
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "invalid --forward") {
+			t.Fatalf("unexpected err: %v", err)
+		}
+	})
 }
 
 func TestGmailFilters_TextPaths(t *testing.T) {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/alecthomas/kong"
 	"google.golang.org/api/gmail/v1"
@@ -70,7 +71,11 @@ func (c *GmailAutoForwardUpdateCmd) Run(ctx context.Context, kctx *kong.Context,
 		updates["enabled"] = false
 	}
 	if flagProvided(kctx, "email") {
-		updates["email_address"] = c.Email
+		email := strings.TrimSpace(c.Email)
+		if err := validateGmailSettingsEmail("--email", email); err != nil {
+			return err
+		}
+		updates["email_address"] = email
 	}
 	if flagProvided(kctx, "disposition") {
 		// Validate disposition value
@@ -123,7 +128,7 @@ func (c *GmailAutoForwardUpdateCmd) Run(ctx context.Context, kctx *kong.Context,
 		autoForward.Enabled = false
 	}
 	if flagProvided(kctx, "email") {
-		autoForward.EmailAddress = c.Email
+		autoForward.EmailAddress = strings.TrimSpace(c.Email)
 	}
 	if flagProvided(kctx, "disposition") {
 		autoForward.Disposition = c.Disposition

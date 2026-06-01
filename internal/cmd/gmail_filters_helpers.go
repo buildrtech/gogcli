@@ -155,6 +155,11 @@ func (c *GmailFiltersCreateCmd) validate() (string, error) {
 	if c.AddLabel == "" && c.RemoveLabel == "" && !c.Archive && !c.MarkRead && !c.Star && forwardTarget == "" && !c.Trash && !c.NeverSpam && !c.Important {
 		return "", errors.New("must specify at least one action flag (--add-label, --remove-label, --archive, --mark-read, --star, --forward, --trash, --never-spam, or --important)")
 	}
+	if forwardTarget != "" {
+		if err := validateGmailSettingsEmail("--forward", forwardTarget); err != nil {
+			return "", err
+		}
+	}
 	return forwardTarget, nil
 }
 
