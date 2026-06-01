@@ -212,6 +212,30 @@ func TestExecute_PeopleSearch_JSON(t *testing.T) {
 	}
 }
 
+func TestExecute_PeopleSearchInvalidMaxFailsBeforeService(t *testing.T) {
+	origNew := newPeopleDirectoryService
+	t.Cleanup(func() { newPeopleDirectoryService = origNew })
+	newPeopleDirectoryService = func(context.Context, string) (*people.Service, error) {
+		t.Fatalf("expected max validation to fail before creating people service")
+		return nil, errUnexpectedPeopleServiceCall
+	}
+
+	testCases := [][]string{
+		{"--account", "a@b.com", "people", "search", "alice", "--max", "0"},
+		{"--account", "a@b.com", "people", "search", "alice", "--max=-1"},
+	}
+	for _, args := range testCases {
+		t.Run(strings.Join(args[2:], "_"), func(t *testing.T) {
+			_ = captureStderr(t, func() {
+				err := Execute(args)
+				if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "max must be > 0") {
+					t.Fatalf("unexpected err: %v", err)
+				}
+			})
+		})
+	}
+}
+
 func TestExecute_PeopleSearch_Text(t *testing.T) {
 	origNew := newPeopleDirectoryService
 	t.Cleanup(func() { newPeopleDirectoryService = origNew })

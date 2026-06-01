@@ -33,6 +33,9 @@ type PhotosListCmd struct {
 }
 
 func (c *PhotosListCmd) Run(ctx context.Context, flags *RootFlags) error {
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	client, err := requirePhotosClient(ctx, flags)
 	if err != nil {
 		return err
@@ -59,15 +62,18 @@ type PhotosSearchCmd struct {
 }
 
 func (c *PhotosSearchCmd) Run(ctx context.Context, flags *RootFlags) error {
-	client, err := requirePhotosClient(ctx, flags)
-	if err != nil {
-		return err
+	if c.Max <= 0 {
+		return usage("max must be > 0")
 	}
 	start, err := parsePhotosDateFlag(c.From, "--from")
 	if err != nil {
 		return err
 	}
 	end, err := parsePhotosDateFlag(c.To, "--to")
+	if err != nil {
+		return err
+	}
+	client, err := requirePhotosClient(ctx, flags)
 	if err != nil {
 		return err
 	}

@@ -75,13 +75,16 @@ type PeopleSearchCmd struct {
 
 func (c *PeopleSearchCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	query := strings.TrimSpace(strings.Join(c.Query, " "))
 	if query == "" {
 		return usage("required: query")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newPeopleDirectoryService(ctx, account)
