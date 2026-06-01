@@ -34,14 +34,16 @@ type AdminUsersListCmd struct {
 
 func (c *AdminUsersListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAdminAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	domain := strings.TrimSpace(c.Domain)
 	if domain == "" {
 		return usage("domain required (e.g., --domain example.com)")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
+	account, err := requireAdminAccount(flags)
+	if err != nil {
+		return err
 	}
 
 	svc, err := newAdminDirectoryService(ctx, account)

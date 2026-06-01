@@ -499,7 +499,7 @@ func TestAdminUsersList_JSON_AllowsNilName(t *testing.T) {
 	ctx := newCmdJSONContext(t)
 
 	out := captureStdout(t, func() {
-		if err := (&AdminUsersListCmd{Domain: "example.com"}).Run(ctx, &RootFlags{Account: "svc@example.com"}); err != nil {
+		if err := (&AdminUsersListCmd{Domain: "example.com", Max: 100}).Run(ctx, &RootFlags{Account: "svc@example.com"}); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
 	})
@@ -516,6 +516,32 @@ func TestAdminUsersList_JSON_AllowsNilName(t *testing.T) {
 	}
 	if len(parsed.Users) != 1 || parsed.Users[0].Email != "ada@example.com" || parsed.Users[0].Name != "" || !parsed.Users[0].Admin {
 		t.Fatalf("unexpected users: %#v", parsed.Users)
+	}
+}
+
+func TestAdminListInvalidMaxFailsBeforeWorkspaceCheck(t *testing.T) {
+	origNew := newAdminDirectoryService
+	t.Cleanup(func() { newAdminDirectoryService = origNew })
+	newAdminDirectoryService = func(context.Context, string) (*admin.Service, error) {
+		t.Fatalf("expected max validation to fail before creating admin service")
+		return nil, errors.New("unexpected admin service call")
+	}
+
+	cases := [][]string{
+		{"--account", "user@gmail.com", "admin", "users", "list", "--domain", "example.com", "--max", "0"},
+		{"--account", "user@gmail.com", "admin", "users", "list", "--domain", "example.com", "--max=-1"},
+		{"--account", "user@gmail.com", "admin", "groups", "list", "--domain", "example.com", "--max", "0"},
+		{"--account", "user@gmail.com", "admin", "groups", "list", "--domain", "example.com", "--max=-1"},
+		{"--account", "user@gmail.com", "admin", "groups", "members", "list", "eng@example.com", "--max", "0"},
+		{"--account", "user@gmail.com", "admin", "groups", "members", "list", "eng@example.com", "--max=-1"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			err := Execute(args)
+			if ExitCode(err) != 2 || !strings.Contains(err.Error(), "max must be > 0") {
+				t.Fatalf("unexpected err: %v", err)
+			}
+		})
 	}
 }
 
