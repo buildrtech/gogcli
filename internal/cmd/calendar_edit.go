@@ -1192,7 +1192,7 @@ func resolveRecurringScope(scopeValue, originalStartTime string) (string, error)
 		}
 	case scopeAll:
 	default:
-		return "", fmt.Errorf("invalid scope: %q (must be single, future, or all)", scope)
+		return "", usagef("invalid scope: %q (must be single, future, or all)", scope)
 	}
 	return scope, nil
 }

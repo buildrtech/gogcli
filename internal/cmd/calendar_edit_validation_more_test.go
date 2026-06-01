@@ -146,8 +146,12 @@ func TestCalendarUpdateCmd_ValidationErrors(t *testing.T) {
 	{
 		cmd := &CalendarUpdateCmd{CalendarID: "cal", EventID: "evt", Scope: "nope"}
 		kctx := parseKongContext(t, cmd, []string{"cal", "evt", "--scope", "nope"})
-		if err := cmd.Run(ctx, kctx, flags); err == nil {
+		err := cmd.Run(ctx, kctx, flags)
+		if err == nil {
 			t.Fatalf("expected error for invalid scope")
+		}
+		if got := ExitCode(err); got != 2 {
+			t.Fatalf("ExitCode = %d, want 2 (err=%v)", got, err)
 		}
 	}
 	{
@@ -250,8 +254,14 @@ func TestCalendarDeleteCmd_ValidationErrors(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if err := tc.cmd.Run(ctx, flags); err == nil {
+		err := tc.cmd.Run(ctx, flags)
+		if err == nil {
 			t.Fatalf("expected error for %s", tc.name)
+		}
+		if tc.name == "invalid scope" {
+			if got := ExitCode(err); got != 2 {
+				t.Fatalf("ExitCode = %d, want 2 (err=%v)", got, err)
+			}
 		}
 	}
 }
