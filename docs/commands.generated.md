@@ -234,7 +234,7 @@ Generated from `gog schema --json`.
       - [`gog docs (doc) comments resolve <docId> <commentId> [flags]`](commands/gog-docs-comments-resolve.md) - Resolve a comment (mark as done)
     - [`gog docs (doc) copy (cp,duplicate) <docId> <title> [flags]`](commands/gog-docs-copy.md) - Copy a Google Doc
     - [`gog docs (doc) create (add,new) <title> [flags]`](commands/gog-docs-create.md) - Create a Google Doc
-    - [`gog docs (doc) delete --start=INT-64 --end=INT-64 <docId> [flags]`](commands/gog-docs-delete.md) - Delete text range from document
+    - [`gog docs (doc) delete <docId> [flags]`](commands/gog-docs-delete.md) - Delete text range from document
     - [`gog docs (doc) delete-tab <docId> [flags]`](commands/gog-docs-delete-tab.md) - Delete a tab from a Google Doc
     - [`gog docs (doc) edit <docId> <find> <replace> [flags]`](commands/gog-docs-edit.md) - Find and replace text in a Google Doc
     - [`gog docs (doc) export (download,dl) <docId> [flags]`](commands/gog-docs-export.md) - Export a Google Doc (pdf|docx|txt|md|html)
