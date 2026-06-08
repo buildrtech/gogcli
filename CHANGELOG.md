@@ -4,6 +4,7 @@
 
 ### Added
 
+- CI: enforce a pinned Go dead-code check and remove the unreachable helpers it identified. (#714) — thanks @vincentkoc.
 - Chat: add repeatable `--attach` to `chat messages send` for sending local files with Google Chat messages. (#694) — thanks @omothm.
 - Docs: add `docs comments locate` to resolve comment quotes to Docs API index ranges and report orphaned comments. (#687) — thanks @sebsnyk.
 - Docs: add `docs find-range` to map matched text to Docs API UTF-16 index ranges. (#682) — thanks @sebsnyk.
