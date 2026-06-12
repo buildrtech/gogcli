@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/api/chat/v1"
 	"google.golang.org/api/drive/v3"
 	formsapi "google.golang.org/api/forms/v1"
 	"google.golang.org/api/gmail/v1"
@@ -84,6 +85,31 @@ func TestDriveServiceUsesRuntimeFactory(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("driveService() = %p, want %p", got, want)
+	}
+	if gotAccount != "test@example.com" {
+		t.Fatalf("factory account = %q, want test@example.com", gotAccount)
+	}
+}
+
+func TestChatServiceUsesRuntimeFactory(t *testing.T) {
+	t.Parallel()
+
+	want := &chat.Service{}
+	var gotAccount string
+	runtime := &app.Runtime{Services: app.Services{
+		Chat: func(_ context.Context, account string) (*chat.Service, error) {
+			gotAccount = account
+			return want, nil
+		},
+	}}
+	ctx := app.WithRuntime(context.Background(), runtime)
+
+	got, err := chatService(ctx, "test@example.com")
+	if err != nil {
+		t.Fatalf("chatService() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("chatService() = %p, want %p", got, want)
 	}
 	if gotAccount != "test@example.com" {
 		t.Fatalf("factory account = %q, want test@example.com", gotAccount)

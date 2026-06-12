@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/chat/v1"
 	"google.golang.org/api/classroom/v1"
 	"google.golang.org/api/cloudidentity/v1"
 	"google.golang.org/api/docs/v1"
@@ -32,6 +33,7 @@ func newDefaultRuntime() *app.Runtime {
 		},
 		Services: app.Services{
 			Calendar:      googleapi.NewCalendar,
+			Chat:          newChatService,
 			Classroom:     googleapi.NewClassroom,
 			CloudIdentity: newCloudIdentityService,
 			Docs:          googleapi.NewDocs,
@@ -71,6 +73,9 @@ func normalizedRuntime(runtime *app.Runtime) *app.Runtime {
 	}
 	if normalized.Services.Calendar == nil {
 		normalized.Services.Calendar = defaults.Services.Calendar
+	}
+	if normalized.Services.Chat == nil {
+		normalized.Services.Chat = defaults.Services.Chat
 	}
 	if normalized.Services.Classroom == nil {
 		normalized.Services.Classroom = defaults.Services.Classroom
@@ -152,6 +157,13 @@ func calendarService(ctx context.Context, account string) (*calendar.Service, er
 		return runtime.Services.Calendar(ctx, account)
 	}
 	return googleapi.NewCalendar(ctx, account)
+}
+
+func chatService(ctx context.Context, account string) (*chat.Service, error) {
+	if runtime, ok := app.FromContext(ctx); ok && runtime.Services.Chat != nil {
+		return runtime.Services.Chat(ctx, account)
+	}
+	return newChatService(ctx, account)
 }
 
 func classroomService(ctx context.Context, account string) (*classroom.Service, error) {

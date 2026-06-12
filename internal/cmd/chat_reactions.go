@@ -63,7 +63,7 @@ func (c *ChatMessagesReactionsCreateCmd) Run(ctx context.Context, flags *RootFla
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (c *ChatMessagesReactionsListCmd) Run(ctx context.Context, flags *RootFlags
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func (c *ChatMessagesReactionsDeleteCmd) Run(ctx context.Context, flags *RootFla
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
