@@ -226,37 +226,16 @@ type ChatSpacesCreateCmd struct {
 
 func (c *ChatSpacesCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	displayName := strings.TrimSpace(c.DisplayName)
-	if displayName == "" {
-		return usage("required: displayName")
-	}
-
-	members := parseCommaArgs(c.Members)
-	memberUsers := make([]string, 0, len(members))
-	memberships := make([]*chat.Membership, 0, len(members))
-	for _, member := range members {
-		user, err := normalizeChatMemberUser(member)
-		if err != nil {
-			return err
-		}
-		if user == "" {
-			continue
-		}
-		memberUsers = append(memberUsers, user)
-		memberships = append(memberships, &chat.Membership{
-			Member: &chat.User{
-				Name: user,
-				Type: "HUMAN",
-			},
-		})
-	}
-
-	if err := dryRunExit(ctx, flags, "chat.spaces.create", map[string]any{
-		"display_name": displayName,
-		"members":      members,
-		"member_users": memberUsers,
-	}); err != nil {
+	plan, err := newChatSpaceCreatePlan(chatSpaceCreateInput{
+		DisplayName: c.DisplayName,
+		Members:     c.Members,
+	})
+	if err != nil {
 		return err
+	}
+
+	if dryRunErr := dryRunExit(ctx, flags, "chat.spaces.create", plan.dryRunPayload()); dryRunErr != nil {
+		return dryRunErr
 	}
 
 	account, err := requireAccount(flags)
@@ -272,16 +251,7 @@ func (c *ChatSpacesCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	req := &chat.SetUpSpaceRequest{
-		Space: &chat.Space{
-			SpaceType:   "SPACE",
-			DisplayName: displayName,
-		},
-	}
-	if len(memberships) > 0 {
-		req.Memberships = memberships
-	}
-	resp, err := svc.Spaces.Setup(req).Do()
+	resp, err := svc.Spaces.Setup(plan.Request).Do()
 	if err != nil {
 		return err
 	}
@@ -291,7 +261,7 @@ func (c *ChatSpacesCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if resp == nil {
-		u.Out().Linef("space\t%s", displayName)
+		u.Out().Linef("space\t%s", plan.DisplayName)
 		return nil
 	}
 	if resp.Name != "" {
