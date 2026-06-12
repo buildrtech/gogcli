@@ -38,7 +38,7 @@ func (c *SheetsNamedRangesListCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty spreadsheetId")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func (c *SheetsNamedRangesGetCmd) Run(ctx context.Context, flags *RootFlags) err
 		return usage("empty nameOrId")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (c *SheetsNamedRangesAddCmd) Run(ctx context.Context, flags *RootFlags) err
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -274,7 +274,7 @@ func (c *SheetsNamedRangesUpdateCmd) Run(ctx context.Context, flags *RootFlags) 
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -378,7 +378,7 @@ func (c *SheetsNamedRangesDeleteCmd) Run(ctx context.Context, flags *RootFlags) 
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}

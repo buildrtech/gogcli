@@ -60,7 +60,7 @@ func (c *SheetsBandingSetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if err != nil {
 		return err
 	}
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (c *SheetsBandingListCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if spreadsheetID == "" {
 		return usage("empty spreadsheetId")
 	}
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func (c *SheetsBandingClearCmd) Run(ctx context.Context, flags *RootFlags) error
 		if err != nil {
 			return err
 		}
-		svc, err := newSheetsService(ctx, account)
+		svc, err := sheetsService(ctx, account)
 		if err != nil {
 			return err
 		}
@@ -233,7 +233,7 @@ func (c *SheetsBandingClearCmd) Run(ctx context.Context, flags *RootFlags) error
 	if err != nil {
 		return err
 	}
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}

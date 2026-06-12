@@ -66,7 +66,7 @@ func (c *SheetsDeleteDimensionCmd) Run(ctx context.Context, flags *RootFlags) er
 	if err != nil {
 		return err
 	}
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}

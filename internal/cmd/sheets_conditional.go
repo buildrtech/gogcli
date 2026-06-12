@@ -71,7 +71,7 @@ func (c *SheetsConditionalAddCmd) Run(ctx context.Context, flags *RootFlags) err
 	if err != nil {
 		return err
 	}
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func (c *SheetsConditionalListCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty spreadsheetId")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func (c *SheetsConditionalClearCmd) Run(ctx context.Context, flags *RootFlags) e
 	if err != nil {
 		return err
 	}
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}

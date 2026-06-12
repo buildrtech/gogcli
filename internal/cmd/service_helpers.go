@@ -46,7 +46,7 @@ func requireMeetService(ctx context.Context, flags *RootFlags) (string, *meet.Se
 }
 
 func requireSheetsService(ctx context.Context, flags *RootFlags) (string, *sheets.Service, error) {
-	return requireGoogleService(ctx, flags, newSheetsService)
+	return requireGoogleService(ctx, flags, sheetsService)
 }
 
 func requireGoogleService[T any](ctx context.Context, flags *RootFlags, newService func(context.Context, string) (*T, error)) (string, *T, error) {

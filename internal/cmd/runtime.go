@@ -9,6 +9,7 @@ import (
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/people/v1"
+	"google.golang.org/api/sheets/v4"
 	"google.golang.org/api/slides/v1"
 
 	"github.com/steipete/gogcli/internal/app"
@@ -26,6 +27,7 @@ func newDefaultRuntime() *app.Runtime {
 			Drive:          googleapi.NewDrive,
 			Gmail:          googleapi.NewGmail,
 			PeopleContacts: newPeopleContactsService,
+			Sheets:         newSheetsService,
 			Slides:         googleapi.NewSlides,
 			DriveDownload:  driveDownload,
 			DriveExport:    driveExportDownload,
@@ -56,6 +58,9 @@ func normalizedRuntime(runtime *app.Runtime) *app.Runtime {
 	}
 	if normalized.Services.PeopleContacts == nil {
 		normalized.Services.PeopleContacts = defaults.Services.PeopleContacts
+	}
+	if normalized.Services.Sheets == nil {
+		normalized.Services.Sheets = defaults.Services.Sheets
 	}
 	if normalized.Services.Slides == nil {
 		normalized.Services.Slides = defaults.Services.Slides
@@ -112,6 +117,13 @@ func peopleContactsService(ctx context.Context, account string) (*people.Service
 		return runtime.Services.PeopleContacts(ctx, account)
 	}
 	return newPeopleContactsService(ctx, account)
+}
+
+func sheetsService(ctx context.Context, account string) (*sheets.Service, error) {
+	if runtime, ok := app.FromContext(ctx); ok && runtime.Services.Sheets != nil {
+		return runtime.Services.Sheets(ctx, account)
+	}
+	return newSheetsService(ctx, account)
 }
 
 func slidesService(ctx context.Context, account string) (*slides.Service, error) {

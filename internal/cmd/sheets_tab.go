@@ -46,7 +46,7 @@ func (c *SheetsAddTabCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (c *SheetsRenameTabCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (c *SheetsDeleteTabCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/people/v1"
+	"google.golang.org/api/sheets/v4"
 	"google.golang.org/api/slides/v1"
 
 	"github.com/steipete/gogcli/internal/app"
@@ -160,6 +161,31 @@ func TestPeopleContactsServiceUsesRuntimeFactory(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("peopleContactsService() = %p, want %p", got, want)
+	}
+	if gotAccount != "test@example.com" {
+		t.Fatalf("factory account = %q, want test@example.com", gotAccount)
+	}
+}
+
+func TestSheetsServiceUsesRuntimeFactory(t *testing.T) {
+	t.Parallel()
+
+	want := &sheets.Service{}
+	var gotAccount string
+	runtime := &app.Runtime{Services: app.Services{
+		Sheets: func(_ context.Context, account string) (*sheets.Service, error) {
+			gotAccount = account
+			return want, nil
+		},
+	}}
+	ctx := app.WithRuntime(context.Background(), runtime)
+
+	got, err := sheetsService(ctx, "test@example.com")
+	if err != nil {
+		t.Fatalf("sheetsService() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("sheetsService() = %p, want %p", got, want)
 	}
 	if gotAccount != "test@example.com" {
 		t.Fatalf("factory account = %q, want test@example.com", gotAccount)

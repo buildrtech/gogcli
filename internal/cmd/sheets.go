@@ -126,7 +126,7 @@ func (c *SheetsGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty range")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func (c *SheetsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -340,7 +340,7 @@ func (c *SheetsBatchUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -465,7 +465,7 @@ func (c *SheetsAppendCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -535,7 +535,7 @@ func (c *SheetsClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -618,7 +618,7 @@ func (c *SheetsMetadataCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty spreadsheetId")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -689,7 +689,7 @@ func (c *SheetsCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
