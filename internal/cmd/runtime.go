@@ -31,6 +31,7 @@ import (
 	"github.com/steipete/gogcli/internal/app"
 	"github.com/steipete/gogcli/internal/googleapi"
 	"github.com/steipete/gogcli/internal/googleauth"
+	"github.com/steipete/gogcli/internal/termutil"
 )
 
 func newDefaultRuntime() *app.Runtime {
@@ -215,6 +216,15 @@ func stdoutWriter(ctx context.Context) io.Writer {
 
 func stderrWriter(ctx context.Context) io.Writer {
 	return commandIO(ctx).Err
+}
+
+func stdinReader(ctx context.Context) io.Reader {
+	return commandIO(ctx).In
+}
+
+func stdinIsTerminal(ctx context.Context) bool {
+	file, ok := stdinReader(ctx).(*os.File)
+	return ok && termutil.IsTerminal(file)
 }
 
 func adminDirectoryService(ctx context.Context, account string) (*admin.Service, error) {

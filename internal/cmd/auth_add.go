@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -178,7 +177,7 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 				return manualErr
 			}
 			if outfmt.IsJSON(ctx) {
-				return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+				return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 					"auth_url":     result.URL,
 					"state_reused": result.StateReused,
 				})
@@ -300,7 +299,7 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 		}
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"stored":   true,
 			"email":    authorizedEmail,
 			"services": serviceNames,

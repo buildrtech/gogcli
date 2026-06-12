@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -212,7 +211,7 @@ func (c *AuthListCmd) writeAuthListJSON(ctx context.Context, entries []authListE
 		out = append(out, it)
 	}
 
-	return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"accounts": out})
+	return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"accounts": out})
 }
 
 func (c *AuthListCmd) annotateAuthListCheck(ctx context.Context, e authListEntry, it *authListJSONItem) {
