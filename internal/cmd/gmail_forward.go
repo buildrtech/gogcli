@@ -29,7 +29,7 @@ func (c *GmailForwardCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("required: messageId")
 	}
 
-	note, err := resolveBodyInput(c.Note, c.NoteFile)
+	note, err := resolveBodyInput(ctx, c.Note, c.NoteFile)
 	if err != nil {
 		return err
 	}
