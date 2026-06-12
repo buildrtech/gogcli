@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/api/calendar/v3"
 
+	"github.com/steipete/gogcli/internal/app"
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
 )
@@ -23,9 +24,22 @@ func newTestCalendarService(t *testing.T, h http.Handler) (*calendar.Service, fu
 	return newCalendarServiceForTest(t, h)
 }
 
-func stubCalendarServiceForTest(t *testing.T, svc *calendar.Service) {
-	t.Helper()
-	stubGoogleTestService(t, &newCalendarService, svc)
+func withCalendarTestService(ctx context.Context, svc *calendar.Service) context.Context {
+	return withCalendarTestServiceFactory(ctx, func(context.Context, string) (*calendar.Service, error) {
+		return svc, nil
+	})
+}
+
+func withCalendarTestServiceFactory(ctx context.Context, factory app.CalendarServiceFactory) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtime := &app.Runtime{}
+	if existing, ok := app.FromContext(ctx); ok {
+		*runtime = *existing
+	}
+	runtime.Services.Calendar = factory
+	return app.WithRuntime(ctx, runtime)
 }
 
 func newCalendarOutputContext(t *testing.T, stdout, stderr io.Writer) context.Context {

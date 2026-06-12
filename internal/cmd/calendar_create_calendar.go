@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/calendar/v3"
@@ -60,7 +59,7 @@ func (c *CalendarCreateCalendarCmd) Run(ctx context.Context, flags *RootFlags) e
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"calendar": created})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"calendar": created})
 	}
 
 	u.Out().Linef("id\t%s", created.Id)
