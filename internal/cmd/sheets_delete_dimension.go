@@ -38,9 +38,9 @@ func (c *SheetsDeleteDimensionCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty spreadsheetId")
 	}
 
-	spec, err := parseSheetsDeleteDimensionSpec(c.Target, c.Dimension, c.Start, c.End)
+	spec, err := sheetsdimension.ParseDeleteSpec(c.Target, c.Dimension, c.Start, c.End)
 	if err != nil {
-		return err
+		return sheetsDimensionPlannerError(err)
 	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "sheets.delete-dimension", map[string]any{
@@ -140,62 +140,6 @@ func (c *SheetsDeleteDimensionCmd) Run(ctx context.Context, flags *RootFlags) er
 	u.Out().Linef("Deleted %d %s from %q (%d-%d); resized %d table(s)",
 		count, spec.Label, sheetTitle, spec.StartIndex+1, spec.EndIndex, len(tableUpdates))
 	return nil
-}
-
-func parseSheetsDeleteDimensionSpec(target, dimension string, start, end int64) (sheetsDeleteDimensionSpec, error) {
-	target = cleanRange(strings.TrimSpace(target))
-	if target == "" {
-		return sheetsDeleteDimensionSpec{}, usage("empty rangeOrSheet")
-	}
-
-	spec := sheetsDeleteDimensionSpec{}
-	switch strings.ToUpper(strings.TrimSpace(dimension)) {
-	case "ROW", "ROWS":
-		spec.Dimension = sheetsDimensionRows
-		spec.Label = "rows"
-	case "COL", "COLS", "COLUMN", "COLUMNS":
-		spec.Dimension = sheetsDimensionColumns
-		spec.Label = "columns"
-	default:
-		return sheetsDeleteDimensionSpec{}, usagef("dimension must be ROWS or COLUMNS, got %q", dimension)
-	}
-
-	if start == 0 && end == 0 {
-		if !strings.Contains(target, "!") {
-			return sheetsDeleteDimensionSpec{}, usage("sheet targets require both --start and --end; range targets must include a sheet name")
-		}
-		var span dimensionSpan
-		var err error
-		if spec.Dimension == sheetsDimensionRows {
-			span, err = parseRowsSpan(target, "delete-dimension")
-		} else {
-			span, err = parseColumnsSpan(target, "delete-dimension")
-		}
-		if err != nil {
-			return sheetsDeleteDimensionSpec{}, usagef(
-				"sheet targets require both --start and --end; otherwise provide a matching row/column range: %v",
-				err,
-			)
-		}
-		spec.SheetName = span.SheetName
-		spec.StartIndex = span.StartIndex
-		spec.EndIndex = span.EndIndex
-		return spec, nil
-	}
-	if start == 0 || end == 0 {
-		return sheetsDeleteDimensionSpec{}, usage("provide both --start and --end")
-	}
-	if start < 1 {
-		return sheetsDeleteDimensionSpec{}, usage("start must be >= 1")
-	}
-	if end < start {
-		return sheetsDeleteDimensionSpec{}, usage("end must be >= start")
-	}
-
-	spec.SheetName = target
-	spec.StartIndex = start - 1
-	spec.EndIndex = end
-	return spec, nil
 }
 
 func fetchSheetsDeleteDimensionMetadata(
