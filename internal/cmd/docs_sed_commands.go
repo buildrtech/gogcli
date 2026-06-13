@@ -216,41 +216,46 @@ func extractParagraphText(p *docs.Paragraph) string {
 
 // --- Addressed command implementations ---
 
-// resolveAddress converts a sedAddress into a slice of target paragraphs from the map.
-func resolveAddress(addr *sedAddress, pm *paragraphMap) ([]docParagraph, error) {
-	if addr == nil {
-		return nil, fmt.Errorf("nil address")
+func addressElements(paragraphs []docParagraph) []docssed.AddressElement {
+	elements := make([]docssed.AddressElement, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		kind := docssed.AddressElementKind(paragraph.ElemType)
+		elements = append(elements, docssed.AddressElement{
+			Number:     paragraph.Num,
+			Kind:       kind,
+			Text:       paragraph.Text,
+			StartIndex: paragraph.StartIndex,
+			EndIndex:   paragraph.EndIndex,
+		})
 	}
-	if len(pm.Paragraphs) == 0 {
-		return nil, fmt.Errorf("document has no paragraphs")
-	}
+	return elements
+}
 
-	last := len(pm.Paragraphs)
-
-	start := addr.Start
-	if start == -1 {
-		start = last
+func buildAddressMutationRequests(mutations []docssed.AddressMutation, tabID string) []*docs.Request {
+	requests := make([]*docs.Request, 0, len(mutations)*2)
+	for index := len(mutations) - 1; index >= 0; index-- {
+		mutation := mutations[index]
+		if mutation.EndIndex > mutation.StartIndex {
+			requests = append(requests, &docs.Request{
+				DeleteContentRange: &docs.DeleteContentRangeRequest{
+					Range: &docs.Range{
+						StartIndex: mutation.StartIndex,
+						EndIndex:   mutation.EndIndex,
+						TabId:      tabID,
+					},
+				},
+			})
+		}
+		if mutation.InsertText != "" {
+			requests = append(requests, &docs.Request{
+				InsertText: &docs.InsertTextRequest{
+					Location: &docs.Location{Index: mutation.StartIndex, TabId: tabID},
+					Text:     mutation.InsertText,
+				},
+			})
+		}
 	}
-	if start < 1 || start > last {
-		return nil, fmt.Errorf("address %d out of range (document has %d paragraphs)", start, last)
-	}
-
-	if !addr.HasRange {
-		return []docParagraph{pm.Paragraphs[start-1]}, nil
-	}
-
-	end := addr.End
-	if end == 0 {
-		end = start
-	}
-	if end == -1 {
-		end = last
-	}
-	if end < 1 || end > last {
-		return nil, fmt.Errorf("address end %d out of range (document has %d paragraphs)", end, last)
-	}
-
-	return pm.Paragraphs[start-1 : end], nil
+	return requests
 }
 
 // runAddressedDelete deletes paragraphs by address (number or range).
@@ -265,42 +270,13 @@ func (c *DocsSedCmd) runAddressedDelete(ctx context.Context, u *ui.UI, account, 
 		return err
 	}
 
-	targets, err := resolveAddress(expr.addr, pm)
+	elements := addressElements(pm.Paragraphs)
+	targets, err := docssed.ResolveAddress(expr.addr, elements)
 	if err != nil {
 		return err
 	}
-
-	// Build delete requests in reverse order to preserve indices
-	var requests []*docs.Request
-	for i := len(targets) - 1; i >= 0; i-- {
-		para := targets[i]
-		startIndex := para.StartIndex
-		endIndex := para.EndIndex
-
-		isLast := para.Num == len(pm.Paragraphs)
-		if isLast && para.Num > 1 {
-			// Last paragraph: delete from end of previous paragraph to our end-1
-			prev := pm.Paragraphs[para.Num-2]
-			startIndex = prev.EndIndex - 1
-			endIndex = para.EndIndex - 1
-		} else if isLast && para.Num == 1 {
-			// Only paragraph: just clear the text
-			if para.StartIndex >= para.EndIndex-1 {
-				continue // empty paragraph, skip
-			}
-			endIndex = para.EndIndex - 1
-		}
-
-		requests = append(requests, &docs.Request{
-			DeleteContentRange: &docs.DeleteContentRangeRequest{
-				Range: &docs.Range{
-					StartIndex: startIndex,
-					EndIndex:   endIndex,
-					TabId:      pm.TabID,
-				},
-			},
-		})
-	}
+	mutations := docssed.PlanAddressedDelete(elements, targets)
+	requests := buildAddressMutationRequests(mutations, pm.TabID)
 
 	if len(requests) == 0 {
 		return sedOutputOK(ctx, u, id, sedOutputKV{Key: "deleted", Value: "0"})
@@ -325,31 +301,13 @@ func (c *DocsSedCmd) runAddressedAppend(ctx context.Context, u *ui.UI, account, 
 		return err
 	}
 
-	targets, err := resolveAddress(expr.addr, pm)
+	elements := addressElements(pm.Paragraphs)
+	targets, err := docssed.ResolveAddress(expr.addr, elements)
 	if err != nil {
 		return err
 	}
-
-	insertText := strings.ReplaceAll(expr.replacement, "\\n", "\n")
-	if !strings.HasSuffix(insertText, "\n") {
-		insertText = "\n" + insertText
-	} else {
-		insertText = "\n" + insertText[:len(insertText)-1]
-	}
-
-	// Insert in reverse order to preserve indices
-	var requests []*docs.Request
-	for i := len(targets) - 1; i >= 0; i-- {
-		para := targets[i]
-		// Insert before the trailing \n of the paragraph
-		idx := para.EndIndex - 1
-		requests = append(requests, &docs.Request{
-			InsertText: &docs.InsertTextRequest{
-				Location: &docs.Location{Index: idx, TabId: pm.TabID},
-				Text:     insertText,
-			},
-		})
-	}
+	mutations := docssed.PlanAddressedAppend(targets, expr.replacement)
+	requests := buildAddressMutationRequests(mutations, pm.TabID)
 
 	if _, err := batchUpdate(ctx, docsSvc, id, requests); err != nil {
 		return fmt.Errorf("batch update (addressed append): %w", err)
@@ -370,27 +328,13 @@ func (c *DocsSedCmd) runAddressedInsert(ctx context.Context, u *ui.UI, account, 
 		return err
 	}
 
-	targets, err := resolveAddress(expr.addr, pm)
+	elements := addressElements(pm.Paragraphs)
+	targets, err := docssed.ResolveAddress(expr.addr, elements)
 	if err != nil {
 		return err
 	}
-
-	insertText := strings.ReplaceAll(expr.replacement, "\\n", "\n")
-	if !strings.HasSuffix(insertText, "\n") {
-		insertText += "\n"
-	}
-
-	// Insert in reverse order to preserve indices
-	var requests []*docs.Request
-	for i := len(targets) - 1; i >= 0; i-- {
-		para := targets[i]
-		requests = append(requests, &docs.Request{
-			InsertText: &docs.InsertTextRequest{
-				Location: &docs.Location{Index: para.StartIndex, TabId: pm.TabID},
-				Text:     insertText,
-			},
-		})
-	}
+	mutations := docssed.PlanAddressedInsert(targets, expr.replacement)
+	requests := buildAddressMutationRequests(mutations, pm.TabID)
 
 	if _, err := batchUpdate(ctx, docsSvc, id, requests); err != nil {
 		return fmt.Errorf("batch update (addressed insert): %w", err)
@@ -416,14 +360,15 @@ func (c *DocsSedCmd) runAddressedSubstitute(ctx context.Context, u *ui.UI, accou
 		return err
 	}
 
-	targets, err := resolveAddress(expr.addr, pm)
+	elements := addressElements(pm.Paragraphs)
+	targets, err := docssed.ResolveAddress(expr.addr, elements)
 	if err != nil {
 		return err
 	}
 
 	paragraphs := make([]docssed.DocumentParagraph, 0, len(targets))
 	for _, target := range targets {
-		if target.ElemType != "paragraph" {
+		if target.Kind != docssed.AddressParagraph {
 			continue
 		}
 		paragraphs = append(paragraphs, docssed.DocumentParagraph{

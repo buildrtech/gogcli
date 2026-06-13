@@ -143,6 +143,89 @@ func TestRunAddressedSubstituteUsesUTF16AndSkipsTablePreview(t *testing.T) {
 	}
 }
 
+func TestRunAddressedMutationsUsePlannedRanges(t *testing.T) {
+	document := &docs.Document{
+		DocumentId: "test-doc-id",
+		Body: &docs.Body{Content: []*docs.StructuralElement{
+			{
+				StartIndex: 1,
+				EndIndex:   7,
+				Paragraph: &docs.Paragraph{Elements: []*docs.ParagraphElement{{
+					StartIndex: 1,
+					EndIndex:   7,
+					TextRun:    &docs.TextRun{Content: "first\n"},
+				}}},
+			},
+			{
+				StartIndex: 7,
+				EndIndex:   14,
+				Paragraph: &docs.Paragraph{Elements: []*docs.ParagraphElement{{
+					StartIndex: 7,
+					EndIndex:   14,
+					TextRun:    &docs.TextRun{Content: "second\n"},
+				}}},
+			},
+		}},
+	}
+	var captured []*docs.Request
+	server := mockDocsServerAdvanced(t, document, func(requests []*docs.Request) {
+		captured = append(captured, requests...)
+	})
+	defer server.Close()
+	service, err := docs.NewService(
+		context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(server.Client()),
+		option.WithEndpoint(server.URL+"/"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := mockDocsContext(t, service)
+	command := &DocsSedCmd{}
+	ui := sedTestUI()
+
+	err = command.runAddressedInsert(ctx, ui, "", document.DocumentId, "", sedExpr{
+		replacement: "before",
+		addr:        &sedAddress{Start: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 || captured[0].InsertText == nil ||
+		captured[0].InsertText.Location.Index != 1 ||
+		captured[0].InsertText.Text != "before\n" {
+		t.Fatalf("insert requests = %#v", captured)
+	}
+
+	captured = nil
+	err = command.runAddressedAppend(ctx, ui, "", document.DocumentId, "", sedExpr{
+		replacement: "after",
+		addr:        &sedAddress{Start: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 || captured[0].InsertText == nil ||
+		captured[0].InsertText.Location.Index != 13 ||
+		captured[0].InsertText.Text != "\nafter" {
+		t.Fatalf("append requests = %#v", captured)
+	}
+
+	captured = nil
+	err = command.runAddressedDelete(ctx, ui, "", document.DocumentId, "", sedExpr{
+		addr: &sedAddress{Start: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 || captured[0].DeleteContentRange == nil ||
+		captured[0].DeleteContentRange.Range.StartIndex != 6 ||
+		captured[0].DeleteContentRange.Range.EndIndex != 13 {
+		t.Fatalf("delete requests = %#v", captured)
+	}
+}
+
 func TestRunManualInnerFormatsFinalRangesAfterLengthChanges(t *testing.T) {
 	document := &docs.Document{
 		DocumentId: "test-doc-id",

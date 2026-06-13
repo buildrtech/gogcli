@@ -553,48 +553,17 @@ func TestParseFullExpr_Addressed(t *testing.T) {
 	}
 }
 
-func TestResolveAddress(t *testing.T) {
-	pm := &paragraphMap{
-		Paragraphs: []docParagraph{
-			{Num: 1, Text: "first", StartIndex: 0, EndIndex: 6},
-			{Num: 2, Text: "second", StartIndex: 6, EndIndex: 13},
-			{Num: 3, Text: "third", StartIndex: 13, EndIndex: 19},
-			{Num: 4, Text: "fourth", StartIndex: 19, EndIndex: 26},
-			{Num: 5, Text: "fifth", StartIndex: 26, EndIndex: 32},
-		},
-	}
-
-	// Single address
-	targets, err := resolveAddress(&sedAddress{Start: 3}, pm)
-	require.NoError(t, err)
-	assert.Len(t, targets, 1)
-	assert.Equal(t, "third", targets[0].Text)
-
-	// Last paragraph ($)
-	targets, err = resolveAddress(&sedAddress{Start: -1}, pm)
-	require.NoError(t, err)
-	assert.Len(t, targets, 1)
-	assert.Equal(t, "fifth", targets[0].Text)
-
-	// Range
-	targets, err = resolveAddress(&sedAddress{Start: 2, End: 4, HasRange: true}, pm)
-	require.NoError(t, err)
-	assert.Len(t, targets, 3)
-	assert.Equal(t, "second", targets[0].Text)
-	assert.Equal(t, "fourth", targets[2].Text)
-
-	// Range ending with $
-	targets, err = resolveAddress(&sedAddress{Start: 3, End: -1, HasRange: true}, pm)
-	require.NoError(t, err)
-	assert.Len(t, targets, 3)
-	assert.Equal(t, "third", targets[0].Text)
-	assert.Equal(t, "fifth", targets[2].Text)
-
-	// Out of range
-	_, err = resolveAddress(&sedAddress{Start: 10}, pm)
-	assert.Error(t, err)
-
-	// Empty paragraph map
-	_, err = resolveAddress(&sedAddress{Start: 1}, &paragraphMap{})
-	assert.Error(t, err)
+func TestBuildAddressMutationRequestsReversesAndScopesTab(t *testing.T) {
+	requests := buildAddressMutationRequests([]docssed.AddressMutation{
+		{StartIndex: 1, EndIndex: 4},
+		{StartIndex: 8, EndIndex: 8, InsertText: "text\n"},
+	}, "tab-1")
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[0].InsertText)
+	assert.Equal(t, int64(8), requests[0].InsertText.Location.Index)
+	assert.Equal(t, "tab-1", requests[0].InsertText.Location.TabId)
+	require.NotNil(t, requests[1].DeleteContentRange)
+	assert.Equal(t, int64(1), requests[1].DeleteContentRange.Range.StartIndex)
+	assert.Equal(t, int64(4), requests[1].DeleteContentRange.Range.EndIndex)
+	assert.Equal(t, "tab-1", requests[1].DeleteContentRange.Range.TabId)
 }
