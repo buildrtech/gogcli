@@ -316,7 +316,11 @@ func TestListServiceAccountEmails(t *testing.T) {
 		t.Fatalf("write legacy keep-sa file: %v", writeErr)
 	}
 
-	emails, err := ListServiceAccountEmails()
+	layout, err := ResolveSystemLayoutFor("", PathKindConfig, PathKindData)
+	if err != nil {
+		t.Fatalf("ResolveSystemLayoutFor: %v", err)
+	}
+	emails, err := NewServiceAccountStore(layout).ListEmails()
 	if err != nil {
 		t.Fatalf("ListServiceAccountEmails: %v", err)
 	}
@@ -341,7 +345,11 @@ func TestRemoveServiceAccountFiles_RemovesRawLegacyKeepPath(t *testing.T) {
 		t.Fatalf("write legacy keep-sa file: %v", writeErr)
 	}
 
-	removed, err := RemoveServiceAccountFiles("User@Example.com")
+	layout, err := ResolveSystemLayoutFor("", PathKindConfig, PathKindData)
+	if err != nil {
+		t.Fatalf("ResolveSystemLayoutFor: %v", err)
+	}
+	removed, err := NewServiceAccountStore(layout).Remove("User@Example.com")
 	if err != nil {
 		t.Fatalf("RemoveServiceAccountFiles: %v", err)
 	}
@@ -368,7 +376,11 @@ func TestRemoveServiceAccountFiles_SkipsUnsafeRawLegacyKeepPath(t *testing.T) {
 		t.Fatalf("write victim keep-sa file: %v", writeErr)
 	}
 
-	if _, err := RemoveServiceAccountFiles("a/../victim@example.com"); err != nil {
+	layout, err := ResolveSystemLayoutFor("", PathKindConfig, PathKindData)
+	if err != nil {
+		t.Fatalf("ResolveSystemLayoutFor: %v", err)
+	}
+	if _, err := NewServiceAccountStore(layout).Remove("a/../victim@example.com"); err != nil {
 		t.Fatalf("RemoveServiceAccountFiles: %v", err)
 	}
 	if _, statErr := os.Stat(victim); statErr != nil {
@@ -393,11 +405,18 @@ func TestExistingServiceAccountPathExplicitDataSkipsLegacy(t *testing.T) {
 		t.Fatalf("write legacy service account: %v", writeErr)
 	}
 
-	got, err := ExistingServiceAccountPath("user@example.com")
+	layout, err := ResolveSystemLayoutFor("", PathKindConfig, PathKindData)
+	if err != nil {
+		t.Fatalf("ResolveSystemLayoutFor: %v", err)
+	}
+	got, exists, err := NewServiceAccountStore(layout).Existing("user@example.com", false)
 	if err != nil {
 		t.Fatalf("ExistingServiceAccountPath: %v", err)
 	}
-	if got == legacyPath {
+	if exists {
+		t.Fatalf("expected legacy path to be absent with explicit data dir")
+	}
+	if got.Path == legacyPath {
 		t.Fatalf("expected explicit data dir to skip legacy path %q", legacyPath)
 	}
 }
@@ -417,7 +436,11 @@ func TestListServiceAccountEmailsExplicitDataSkipsLegacy(t *testing.T) {
 		t.Fatalf("write legacy service account: %v", writeErr)
 	}
 
-	emails, err := ListServiceAccountEmails()
+	layout, err := ResolveSystemLayoutFor("", PathKindConfig, PathKindData)
+	if err != nil {
+		t.Fatalf("ResolveSystemLayoutFor: %v", err)
+	}
+	emails, err := NewServiceAccountStore(layout).ListEmails()
 	if err != nil {
 		t.Fatalf("ListServiceAccountEmails: %v", err)
 	}

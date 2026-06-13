@@ -34,7 +34,7 @@ func TestNewServicesWithStoredToken(t *testing.T) {
 		return store, nil
 	}
 
-	ctx := testClientResolverContext()
+	ctx := testClientResolverContext(t)
 
 	if _, err := NewGmail(ctx, "a@b.com"); err != nil {
 		t.Fatalf("NewGmail: %v", err)
@@ -112,6 +112,41 @@ func TestNewKeepWithServiceAccountErrors(t *testing.T) {
 	}
 }
 
+func TestNewKeepWithServiceAccountUsesSharedTokenSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service-account.json")
+	if err := os.WriteFile(path, []byte(`{"type":"service_account"}`), 0o600); err != nil {
+		t.Fatalf("write service account: %v", err)
+	}
+
+	origSA := newServiceAccountTokenSource
+
+	t.Cleanup(func() { newServiceAccountTokenSource = origSA })
+
+	var (
+		gotSubject string
+		gotScopes  []string
+	)
+	newServiceAccountTokenSource = func(_ context.Context, _ []byte, subject string, scopes []string) (oauth2.TokenSource, error) {
+		gotSubject = subject
+
+		gotScopes = append([]string(nil), scopes...)
+
+		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token"}), nil
+	}
+
+	if _, err := NewKeepWithServiceAccount(context.Background(), path, "a@b.com"); err != nil {
+		t.Fatalf("NewKeepWithServiceAccount: %v", err)
+	}
+
+	if gotSubject != "a@b.com" {
+		t.Fatalf("subject = %q", gotSubject)
+	}
+
+	if len(gotScopes) == 0 {
+		t.Fatal("expected Keep scopes")
+	}
+}
+
 func TestNewCloudIdentityGroupsAuthErrorUsesGroupsLabel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -134,7 +169,7 @@ func TestNewCloudIdentityGroupsAuthErrorUsesGroupsLabel(t *testing.T) {
 		return nil, errBoom
 	}
 
-	_, err := NewCloudIdentityGroups(testClientResolverContext(), "admin@example.com")
+	_, err := NewCloudIdentityGroups(testClientResolverContext(t), "admin@example.com")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -154,7 +189,7 @@ func TestNewCloudIdentityGroupsUsesDirectToken(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
 
-	ctx := authclient.WithAccessToken(testClientResolverContext(), "direct-token")
+	ctx := authclient.WithAccessToken(testClientResolverContext(t), "direct-token")
 
 	if _, err := NewCloudIdentityGroups(ctx, "admin@example.com"); err != nil {
 		t.Fatalf("NewCloudIdentityGroups: %v", err)
@@ -176,7 +211,7 @@ func TestNewCloudIdentityGroupsUsesADC(t *testing.T) {
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "adc-token"}), nil
 	}
 
-	if _, err := NewCloudIdentityGroups(testClientResolverContext(), "admin@example.com"); err != nil {
+	if _, err := NewCloudIdentityGroups(testClientResolverContext(t), "admin@example.com"); err != nil {
 		t.Fatalf("NewCloudIdentityGroups: %v", err)
 	}
 }
@@ -199,7 +234,7 @@ func TestNewCloudIdentityGroupsADCPrecedesDirectToken(t *testing.T) {
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "adc-token"}), nil
 	}
 
-	ctx := authclient.WithAccessToken(testClientResolverContext(), "direct-token")
+	ctx := authclient.WithAccessToken(testClientResolverContext(t), "direct-token")
 	if _, err := NewCloudIdentityGroups(ctx, "admin@example.com"); err != nil {
 		t.Fatalf("NewCloudIdentityGroups: %v", err)
 	}
@@ -210,20 +245,8 @@ func TestNewCloudIdentityGroupsADCPrecedesDirectToken(t *testing.T) {
 }
 
 func TestNewCloudIdentityGroupsUsesRequiredServiceAccount(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
-
-	saPath, err := config.ServiceAccountPath("admin@example.com")
-	if err != nil {
-		t.Fatalf("ServiceAccountPath: %v", err)
-	}
-
-	if _, err := config.EnsureDataDir(); err != nil {
-		t.Fatalf("EnsureDataDir: %v", err)
-	}
-
-	if err := os.WriteFile(saPath, []byte(`{"type":"service_account"}`), 0o600); err != nil {
+	ctx, serviceAccounts := testClientResolverContextWithServiceAccounts(t)
+	if _, err := serviceAccounts.Write("admin@example.com", []byte(`{"type":"service_account"}`)); err != nil {
 		t.Fatalf("write service account: %v", err)
 	}
 
@@ -243,7 +266,7 @@ func TestNewCloudIdentityGroupsUsesRequiredServiceAccount(t *testing.T) {
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "service-account-token"}), nil
 	}
 
-	if _, err := NewCloudIdentityGroups(testClientResolverContext(), "admin@example.com"); err != nil {
+	if _, err := NewCloudIdentityGroups(ctx, "admin@example.com"); err != nil {
 		t.Fatalf("NewCloudIdentityGroups: %v", err)
 	}
 }

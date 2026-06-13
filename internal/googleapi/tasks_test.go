@@ -42,7 +42,7 @@ func TestNewTasks(t *testing.T) {
 		return &tasksStubStore{tok: secrets.Token{RefreshToken: "rt"}}, nil
 	}
 
-	svc, err := NewTasks(testClientResolverContext(), "a@b.com")
+	svc, err := NewTasks(testClientResolverContext(t), "a@b.com")
 	if err != nil {
 		t.Fatalf("NewTasks: %v", err)
 	}

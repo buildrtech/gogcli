@@ -192,13 +192,13 @@ func (e authListEntry) details() (client string, created string, services []stri
 	return client, created, nil, nil
 }
 
-func annotateServiceAccountEntries(entries []authListEntry, layout config.Layout) {
+func annotateServiceAccountEntries(entries []authListEntry, store *config.ServiceAccountStore) {
 	for i := range entries {
 		if !entries[i].SA {
 			continue
 		}
-		if _, created, ok := bestServiceAccountPathAndMtime(layout, entries[i].Email); ok {
-			entries[i].SACreated = created
+		if file, ok, err := store.Existing(entries[i].Email, true); err == nil && ok {
+			entries[i].SACreated = file.ModifiedAt
 		}
 	}
 }

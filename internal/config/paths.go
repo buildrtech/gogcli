@@ -34,10 +34,6 @@ func Dir() (string, error) {
 	return currentLayoutDir(PathKindConfig)
 }
 
-func HasExplicitDataOverride() bool {
-	return currentLayoutEnv().hasExplicit(PathKindData)
-}
-
 func DataDir() (string, error) {
 	return currentLayoutDir(PathKindData)
 }
@@ -144,42 +140,6 @@ func ServiceAccountLegacyPath(email string) (string, error) {
 		return "", err
 	}
 	return layout.ServiceAccountLegacyPath(email), nil
-}
-
-func ExistingServiceAccountPath(email string) (string, error) {
-	layout, err := currentLayoutFor(PathKindConfig, PathKindData)
-	if err != nil {
-		return "", err
-	}
-
-	return layout.ExistingServiceAccountPath(email)
-}
-
-func ExistingKeepServiceAccountPath(email string) (string, error) {
-	layout, err := currentLayoutFor(PathKindConfig, PathKindData)
-	if err != nil {
-		return "", err
-	}
-
-	return layout.ExistingKeepServiceAccountPath(email)
-}
-
-func RemoveServiceAccountFiles(email string) (bool, error) {
-	layout, err := currentLayoutFor(PathKindConfig, PathKindData)
-	if err != nil {
-		return false, err
-	}
-
-	return layout.RemoveServiceAccountFiles(email)
-}
-
-func ListServiceAccountEmails() ([]string, error) {
-	layout, err := currentLayoutFor(PathKindConfig, PathKindData)
-	if err != nil {
-		return nil, err
-	}
-
-	return layout.ListServiceAccountEmails()
 }
 
 func uniquePaths(paths ...string) []string {

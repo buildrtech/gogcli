@@ -15,6 +15,7 @@ import (
 	"github.com/steipete/gogcli/internal/authclient"
 	"github.com/steipete/gogcli/internal/config"
 	"github.com/steipete/gogcli/internal/errfmt"
+	"github.com/steipete/gogcli/internal/googleapi"
 	"github.com/steipete/gogcli/internal/googleauth"
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/secrets"
@@ -209,6 +210,9 @@ func executeWithRuntime(args []string, runtime *app.Runtime) (err error) {
 	ctx := context.Background()
 	ctx = app.WithRuntime(ctx, runtime)
 	runtimeContext := ctx
+	ctx = googleapi.WithServiceAccountStoreResolver(ctx, func() (*config.ServiceAccountStore, error) {
+		return commandServiceAccountStore(runtimeContext)
+	})
 	cli.configStoreResolver = func() (*config.ConfigStore, error) {
 		return commandConfigStore(runtimeContext)
 	}

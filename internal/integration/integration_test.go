@@ -82,6 +82,10 @@ func withIntegrationAuth(t *testing.T, ctx context.Context) (context.Context, se
 	ctx = authclient.WithSecretsStoreOpener(ctx, func() (secrets.Store, error) {
 		return secretRepository, nil
 	})
+	serviceAccounts := config.NewServiceAccountStore(layout)
+	ctx = googleapi.WithServiceAccountStoreResolver(ctx, func() (*config.ServiceAccountStore, error) {
+		return serviceAccounts, nil
+	})
 
 	return ctx, secretRepository
 }

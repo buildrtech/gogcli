@@ -439,6 +439,26 @@ func commandLayout(ctx context.Context, kinds ...config.PathKind) (config.Layout
 	return config.ResolveSystemLayoutFor("", kinds...)
 }
 
+func commandServiceAccountStore(ctx context.Context) (*config.ServiceAccountStore, error) {
+	if runtime, ok := app.FromContext(ctx); ok {
+		if runtime.ServiceAccounts != nil {
+			return runtime.ServiceAccounts, nil
+		}
+		if err := configureRuntimeLayout(runtime, "", config.PathKindConfig, config.PathKindData); err != nil {
+			return nil, err
+		}
+		runtime.ServiceAccounts = config.NewServiceAccountStore(runtime.Layout)
+		return runtime.ServiceAccounts, nil
+	}
+
+	layout, err := config.ResolveSystemLayoutFor("", config.PathKindConfig, config.PathKindData)
+	if err != nil {
+		return nil, err
+	}
+
+	return config.NewServiceAccountStore(layout), nil
+}
+
 func resolveRuntimeClient(runtime *app.Runtime, homeOverride string, email string, override string) (string, error) {
 	if err := configureRuntimeConfig(runtime, homeOverride); err != nil {
 		return "", err

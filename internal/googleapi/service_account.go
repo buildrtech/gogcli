@@ -2,9 +2,10 @@ package googleapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
+	"strings"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -12,8 +13,41 @@ import (
 	"github.com/steipete/gogcli/internal/config"
 )
 
+var errServiceAccountStoreRequired = errors.New("service account store resolver is required")
+
+type serviceAccountStoreResolver func() (*config.ServiceAccountStore, error)
+
+type serviceAccountStoreContextKey struct{}
+
+func WithServiceAccountStoreResolver(ctx context.Context, resolver func() (*config.ServiceAccountStore, error)) context.Context {
+	return context.WithValue(ctx, serviceAccountStoreContextKey{}, serviceAccountStoreResolver(resolver))
+}
+
+func serviceAccountStoreFromContext(ctx context.Context) (*config.ServiceAccountStore, error) {
+	resolver, ok := ctx.Value(serviceAccountStoreContextKey{}).(serviceAccountStoreResolver)
+	// Google auth composition must provide an explicit repository, even when
+	// it is empty. Falling through here would hide incomplete runtime wiring.
+	if !ok || resolver == nil {
+		return nil, errServiceAccountStoreRequired
+	}
+
+	store, err := resolver()
+	if err != nil {
+		return nil, fmt.Errorf("resolve service account store: %w", err)
+	}
+
+	if store == nil {
+		return nil, errServiceAccountStoreRequired
+	}
+
+	return store, nil
+}
+
 func serviceAccountSubject(subject string, serviceAccountEmail string) string {
-	if subject == "" || subject == serviceAccountEmail {
+	subject = strings.TrimSpace(subject)
+	serviceAccountEmail = strings.TrimSpace(serviceAccountEmail)
+
+	if subject == "" || strings.EqualFold(subject, serviceAccountEmail) {
 		return ""
 	}
 
@@ -37,66 +71,24 @@ var newServiceAccountTokenSource = func(ctx context.Context, keyJSON []byte, sub
 }
 
 func tokenSourceForServiceAccountScopes(ctx context.Context, serviceLabel string, email string, scopes []string) (oauth2.TokenSource, string, bool, error) {
-	saPath, err := config.ExistingServiceAccountPath(email)
+	store, err := serviceAccountStoreFromContext(ctx)
 	if err != nil {
-		return nil, "", false, fmt.Errorf("service account path: %w", err)
+		return nil, "", false, err
 	}
 
-	data, readErr := os.ReadFile(saPath) //nolint:gosec // stored in user config dir
-	if readErr == nil {
-		ts, tokenErr := newServiceAccountTokenSource(ctx, data, email, scopes)
-		if tokenErr != nil {
-			return nil, "", false, tokenErr
-		}
-
-		return ts, saPath, true, nil
+	file, exists, err := store.Read(email, serviceLabel == "keep")
+	if err != nil {
+		return nil, "", false, fmt.Errorf("read service account: %w", err)
 	}
 
-	if !os.IsNotExist(readErr) {
-		return nil, "", false, fmt.Errorf("read service account key: %w", readErr)
-	}
-
-	// Keep-specific service account files should only be used for Keep.
-	if serviceLabel != "keep" {
+	if !exists {
 		return nil, "", false, nil
 	}
 
-	// Backwards compatibility: Keep used a dedicated stored service account file.
-	keepSAPath, keepErr := config.ExistingKeepServiceAccountPath(email)
-	if keepErr == nil {
-		data, readErr := os.ReadFile(keepSAPath) //nolint:gosec // stored in user config dir
-		if readErr == nil {
-			ts, tokenErr := newServiceAccountTokenSource(ctx, data, email, scopes)
-			if tokenErr != nil {
-				return nil, "", false, tokenErr
-			}
-
-			return ts, keepSAPath, true, nil
-		}
-
-		if !os.IsNotExist(readErr) {
-			return nil, "", false, fmt.Errorf("read service account key: %w", readErr)
-		}
+	ts, err := newServiceAccountTokenSource(ctx, file.Data, email, scopes)
+	if err != nil {
+		return nil, "", false, err
 	}
 
-	if !config.HasExplicitDataOverride() {
-		legacyPath, legacyErr := config.KeepServiceAccountLegacyPath(email)
-		if legacyErr == nil {
-			data, readErr := os.ReadFile(legacyPath) //nolint:gosec // stored in user config dir
-			if readErr == nil {
-				ts, tokenErr := newServiceAccountTokenSource(ctx, data, email, scopes)
-				if tokenErr != nil {
-					return nil, "", false, tokenErr
-				}
-
-				return ts, legacyPath, true, nil
-			}
-
-			if !os.IsNotExist(readErr) {
-				return nil, "", false, fmt.Errorf("read service account key: %w", readErr)
-			}
-		}
-	}
-
-	return nil, "", false, nil
+	return ts, file.Path, true, nil
 }

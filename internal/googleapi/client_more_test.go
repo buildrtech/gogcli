@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -658,10 +657,39 @@ func unsignedIDTokenForTest(t *testing.T, subject string, email string) string {
 	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
 }
 
-func testClientResolverContext() context.Context {
-	return authclient.WithClientResolver(context.Background(), func(_ string, override string) (string, error) {
+func testClientResolverContext(t *testing.T) context.Context {
+	t.Helper()
+
+	ctx, _ := testClientResolverContextWithServiceAccounts(t)
+
+	return ctx
+}
+
+func testClientResolverContextWithServiceAccounts(t *testing.T) (context.Context, *config.ServiceAccountStore) {
+	t.Helper()
+
+	ctx := authclient.WithClientResolver(context.Background(), func(_ string, override string) (string, error) {
 		return config.NormalizeClientNameOrDefault(override)
 	})
+
+	return testServiceAccountContext(t, ctx)
+}
+
+func testServiceAccountContext(t *testing.T, ctx context.Context) (context.Context, *config.ServiceAccountStore) {
+	t.Helper()
+
+	root := t.TempDir()
+	store := config.NewServiceAccountStore(config.Layout{
+		ConfigDir:      filepath.Join(root, "config"),
+		DataDir:        filepath.Join(root, "data"),
+		ExplicitConfig: true,
+		ExplicitData:   true,
+	})
+	ctx = WithServiceAccountStoreResolver(ctx, func() (*config.ServiceAccountStore, error) {
+		return store, nil
+	})
+
+	return ctx, store
 }
 
 func TestClientCredentialsForAccountUsesContextReader(t *testing.T) {
@@ -716,7 +744,7 @@ func TestTokenSourceForAccount_ReadCredsError(t *testing.T) {
 		return config.ClientCredentials{}, errMissingCreds
 	}
 
-	_, err := tokenSourceForAccount(testClientResolverContext(), googleauth.ServiceGmail, "a@b.com")
+	_, err := tokenSourceForAccount(testClientResolverContext(t), googleauth.ServiceGmail, "a@b.com")
 	if err == nil || !errors.Is(err, errMissingCreds) {
 		t.Fatalf("expected missing creds, got: %v", err)
 	}
@@ -738,7 +766,7 @@ func TestOptionsForAccountScopes_HappyPath(t *testing.T) {
 		return &stubStore{tok: secrets.Token{Email: "a@b.com", RefreshToken: "rt"}}, nil
 	}
 
-	opts, err := optionsForAccountScopes(testClientResolverContext(), "svc", "a@b.com", []string{"s1"})
+	opts, err := optionsForAccountScopes(testClientResolverContext(t), "svc", "a@b.com", []string{"s1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -764,7 +792,7 @@ func TestOptionsForAccount_HappyPath(t *testing.T) {
 		return &stubStore{tok: secrets.Token{Email: "a@b.com", RefreshToken: "rt"}}, nil
 	}
 
-	opts, err := optionsForAccount(testClientResolverContext(), googleauth.ServiceDrive, "a@b.com")
+	opts, err := optionsForAccount(testClientResolverContext(t), googleauth.ServiceDrive, "a@b.com")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -835,21 +863,9 @@ func TestOptionsForAccountScopes_RequiredStoredGrantAllowsDirectAccessToken(t *t
 }
 
 func TestOptionsForAccountScopes_ServiceAccountPreferred(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
-
-	saPath, err := config.ServiceAccountPath("a@b.com")
-	if err != nil {
-		t.Fatalf("ServiceAccountPath: %v", err)
-	}
-
-	if _, ensureErr := config.EnsureDataDir(); ensureErr != nil {
-		t.Fatalf("EnsureDataDir: %v", ensureErr)
-	}
-
-	if writeErr := os.WriteFile(saPath, []byte(`{"type":"service_account"}`), 0o600); writeErr != nil {
-		t.Fatalf("write sa: %v", writeErr)
+	ctx, serviceAccounts := testClientResolverContextWithServiceAccounts(t)
+	if _, err := serviceAccounts.Write("a@b.com", []byte(`{"type":"service_account"}`)); err != nil {
+		t.Fatalf("write service account: %v", err)
 	}
 
 	origRead := readClientCredentials
@@ -890,7 +906,7 @@ func TestOptionsForAccountScopes_ServiceAccountPreferred(t *testing.T) {
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t"}), nil
 	}
 
-	opts, err := optionsForAccountScopes(testClientResolverContext(), "svc", "a@b.com", []string{"s1"})
+	opts, err := optionsForAccountScopes(ctx, "svc", "a@b.com", []string{"s1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -1033,7 +1049,7 @@ func TestOptionsForAccountScopes_NoClientTimeout(t *testing.T) {
 		return &stubStore{tok: secrets.Token{Email: "a@b.com", RefreshToken: "rt"}}, nil
 	}
 
-	opts, err := optionsForAccountScopes(testClientResolverContext(), "svc", "a@b.com", []string{"s1"})
+	opts, err := optionsForAccountScopes(testClientResolverContext(t), "svc", "a@b.com", []string{"s1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -1071,7 +1087,7 @@ func TestNewHTTPClient_NoRedirectPolicy(t *testing.T) {
 		return &stubStore{tok: secrets.Token{Email: "a@b.com", RefreshToken: "rt"}}, nil
 	}
 
-	client, err := NewHTTPClient(testClientResolverContext(), googleauth.ServiceDocs, "a@b.com")
+	client, err := NewHTTPClient(testClientResolverContext(t), googleauth.ServiceDocs, "a@b.com")
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

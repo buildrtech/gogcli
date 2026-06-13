@@ -50,9 +50,9 @@ func (c *AuthStatusCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if flags != nil {
 		if a, err := requireAccount(flags); err == nil {
 			account = a
-			layout, layoutErr := commandLayout(ctx, config.PathKindConfig, config.PathKindData)
-			if layoutErr != nil {
-				return layoutErr
+			serviceAccounts, serviceAccountsErr := commandServiceAccountStore(ctx)
+			if serviceAccountsErr != nil {
+				return serviceAccountsErr
 			}
 			resolvedClient, resolveErr := resolveClientForEmail(ctx, account, flags)
 			if resolveErr != nil {
@@ -68,9 +68,11 @@ func (c *AuthStatusCmd) Run(ctx context.Context, flags *RootFlags) error {
 				}
 			}
 			clientSecretInKeyring = commandClientSecretInKeyring(ctx, client)
-			if p, _, ok := bestServiceAccountPathAndMtime(layout, normalizeEmail(account)); ok {
+			if file, ok, findErr := serviceAccounts.Existing(normalizeEmail(account), true); findErr != nil {
+				return findErr
+			} else if ok {
 				serviceAccountConfigured = true
-				serviceAccountPath = p
+				serviceAccountPath = file.Path
 			}
 			if serviceAccountConfigured {
 				authPreferred = authTypeServiceAccount
@@ -134,11 +136,11 @@ func (c *AuthListCmd) Run(ctx context.Context, _ *RootFlags) error {
 		return err
 	}
 
-	layout, err := commandLayout(ctx, config.PathKindConfig, config.PathKindData)
+	serviceAccounts, err := commandServiceAccountStore(ctx)
 	if err != nil {
 		return err
 	}
-	serviceAccountEmails, err := layout.ListServiceAccountEmails()
+	serviceAccountEmails, err := serviceAccounts.ListEmails()
 	if err != nil {
 		return err
 	}
@@ -153,7 +155,7 @@ func (c *AuthListCmd) Run(ctx context.Context, _ *RootFlags) error {
 	}
 
 	entries := buildAuthListEntries(tokens, tokenReadErrors, serviceAccountEmails)
-	annotateServiceAccountEntries(entries, layout)
+	annotateServiceAccountEntries(entries, serviceAccounts)
 
 	if outfmt.IsJSON(ctx) {
 		return c.writeAuthListJSON(ctx, entries)
@@ -165,20 +167,6 @@ func (c *AuthListCmd) Run(ctx context.Context, _ *RootFlags) error {
 	}
 
 	return c.writeAuthListText(ctx, u, entries)
-}
-
-func bestServiceAccountPathAndMtime(layout config.Layout, email string) (string, time.Time, bool) {
-	if p, err := layout.ExistingServiceAccountPath(email); err == nil {
-		if st, err := os.Stat(p); err == nil {
-			return p, st.ModTime(), true
-		}
-	}
-	if p, err := layout.ExistingKeepServiceAccountPath(email); err == nil {
-		if st, err := os.Stat(p); err == nil {
-			return p, st.ModTime(), true
-		}
-	}
-	return "", time.Time{}, false
 }
 
 type AuthServicesCmd struct {
@@ -332,31 +320,25 @@ func (c *AuthKeepCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return parseErr
 	}
 
-	layout, err := commandLayout(ctx, config.PathKindData)
+	serviceAccounts, err := commandServiceAccountStore(ctx)
 	if err != nil {
 		return err
 	}
-	destPath := layout.KeepServiceAccountPath(email)
-	genericPath := layout.ServiceAccountPath(email)
+	destPath := serviceAccounts.KeepPath(email)
+	genericPath := serviceAccounts.Path(email)
 
-	if err := dryRunExit(ctx, flags, "auth.keep", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "auth.keep", map[string]any{
 		"email":        email,
 		"key_path":     keyPath,
 		"dest_path":    destPath,
 		"generic_path": genericPath,
-	}); err != nil {
-		return err
+	}); dryRunErr != nil {
+		return dryRunErr
 	}
 
-	if _, err := layout.EnsureDataDir(); err != nil {
+	paths, err := serviceAccounts.WriteKeepCompatibility(email, data)
+	if err != nil {
 		return err
-	}
-
-	if err := writePrivateFile(destPath, data, 0o600); err != nil {
-		return fmt.Errorf("write service account: %w", err)
-	}
-	if err := writePrivateFile(genericPath, data, 0o600); err != nil {
-		return fmt.Errorf("write service account: %w", err)
 	}
 
 	if outfmt.IsJSON(ctx) {
@@ -364,7 +346,7 @@ func (c *AuthKeepCmd) Run(ctx context.Context, flags *RootFlags) error {
 			"stored": true,
 			"email":  email,
 			"path":   destPath,
-			"paths":  []string{destPath, genericPath},
+			"paths":  paths,
 		})
 	}
 	u.Out().Linef("email\t%s", email)

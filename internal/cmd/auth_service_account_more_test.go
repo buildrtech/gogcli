@@ -67,7 +67,7 @@ func TestAuthServiceAccountCommandsUseInjectedLayout(t *testing.T) {
 		ExplicitData:   true,
 	}
 	runtime := runtimeWithAuthStore(newMemSecretsStore())
-	runtime.Layout = layout
+	runtime.ServiceAccounts = config.NewServiceAccountStore(layout)
 
 	keyPath := filepath.Join(t.TempDir(), "sa.json")
 	if err := os.WriteFile(keyPath, []byte(`{"type":"service_account","client_email":"svc@example.com"}`), 0o600); err != nil {

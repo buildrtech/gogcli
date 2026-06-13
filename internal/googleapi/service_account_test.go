@@ -2,6 +2,7 @@ package googleapi
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,75 @@ import (
 
 	"github.com/steipete/gogcli/internal/config"
 )
+
+func TestTokenSourceForServiceAccountScopesRequiresStore(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := tokenSourceForServiceAccountScopes(context.Background(), "gmail", "a@b.com", []string{"scope"})
+	if !errors.Is(err, errServiceAccountStoreRequired) {
+		t.Fatalf("error = %v, want %v", err, errServiceAccountStoreRequired)
+	}
+}
+
+func TestTokenSourceForServiceAccountScopesPropagatesResolverError(t *testing.T) {
+	t.Parallel()
+
+	want := errBoom
+	ctx := WithServiceAccountStoreResolver(context.Background(), func() (*config.ServiceAccountStore, error) {
+		return nil, want
+	})
+
+	_, _, _, err := tokenSourceForServiceAccountScopes(ctx, "gmail", "a@b.com", []string{"scope"})
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want wrapped %v", err, want)
+	}
+}
+
+func TestTokenSourceForServiceAccountScopesUsesInjectedStore(t *testing.T) {
+	ambientHome := t.TempDir()
+	t.Setenv("HOME", ambientHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(ambientHome, "xdg-config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(ambientHome, "xdg-data"))
+
+	ambientPath, err := config.ServiceAccountPath("a@b.com")
+	if err != nil {
+		t.Fatalf("ServiceAccountPath: %v", err)
+	}
+
+	if _, ensureErr := config.EnsureDataDir(); ensureErr != nil {
+		t.Fatalf("EnsureDataDir: %v", ensureErr)
+	}
+
+	if writeErr := os.WriteFile(ambientPath, []byte("ambient"), 0o600); writeErr != nil {
+		t.Fatalf("write ambient service account: %v", writeErr)
+	}
+
+	ctx, injected := testServiceAccountContext(t, context.Background())
+
+	injectedPath, err := injected.Write("a@b.com", []byte("injected"))
+	if err != nil {
+		t.Fatalf("write injected service account: %v", err)
+	}
+
+	origSA := newServiceAccountTokenSource
+
+	t.Cleanup(func() { newServiceAccountTokenSource = origSA })
+
+	var gotData string
+	newServiceAccountTokenSource = func(_ context.Context, data []byte, _ string, _ []string) (oauth2.TokenSource, error) {
+		gotData = string(data)
+		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token"}), nil
+	}
+
+	_, path, ok, err := tokenSourceForServiceAccountScopes(ctx, "gmail", "a@b.com", []string{"scope"})
+	if err != nil {
+		t.Fatalf("tokenSourceForServiceAccountScopes: %v", err)
+	}
+
+	if !ok || path != injectedPath || gotData != "injected" {
+		t.Fatalf("ok=%t path=%q data=%q, want injected path=%q", ok, path, gotData, injectedPath)
+	}
+}
 
 func TestServiceAccountSubject(t *testing.T) {
 	t.Parallel()
@@ -33,8 +103,14 @@ func TestServiceAccountSubject(t *testing.T) {
 			want:                "",
 		},
 		{
+			name:                "same subject ignores case and whitespace",
+			subject:             " SA@Test-Project.iam.gserviceaccount.com ",
+			serviceAccountEmail: "sa@test-project.iam.gserviceaccount.com",
+			want:                "",
+		},
+		{
 			name:                "different subject keeps impersonation target",
-			subject:             "user@example.com",
+			subject:             " user@example.com ",
 			serviceAccountEmail: "sa@test-project.iam.gserviceaccount.com",
 			want:                "user@example.com",
 		},
@@ -53,21 +129,9 @@ func TestServiceAccountSubject(t *testing.T) {
 }
 
 func TestTokenSourceForServiceAccountScopes_NonKeepIgnoresKeepFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
-
-	keepSAPath, err := config.KeepServiceAccountPath("a@b.com")
-	if err != nil {
-		t.Fatalf("KeepServiceAccountPath: %v", err)
-	}
-
-	if _, ensureErr := config.EnsureDataDir(); ensureErr != nil {
-		t.Fatalf("EnsureDataDir: %v", ensureErr)
-	}
-
-	if writeErr := os.WriteFile(keepSAPath, []byte(`{"type":"service_account"}`), 0o600); writeErr != nil {
-		t.Fatalf("write keep sa: %v", writeErr)
+	ctx, serviceAccounts := testServiceAccountContext(t, context.Background())
+	if _, err := serviceAccounts.WriteKeep("a@b.com", []byte(`{"type":"service_account"}`)); err != nil {
+		t.Fatalf("write Keep service account: %v", err)
 	}
 
 	origSA := newServiceAccountTokenSource
@@ -80,7 +144,7 @@ func TestTokenSourceForServiceAccountScopes_NonKeepIgnoresKeepFallback(t *testin
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t"}), nil
 	}
 
-	ts, path, ok, err := tokenSourceForServiceAccountScopes(context.Background(), "gmail", "a@b.com", []string{"s1"})
+	ts, path, ok, err := tokenSourceForServiceAccountScopes(ctx, "gmail", "a@b.com", []string{"s1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -95,21 +159,11 @@ func TestTokenSourceForServiceAccountScopes_NonKeepIgnoresKeepFallback(t *testin
 }
 
 func TestTokenSourceForServiceAccountScopes_KeepUsesKeepFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	ctx, serviceAccounts := testServiceAccountContext(t, context.Background())
 
-	keepSAPath, err := config.KeepServiceAccountPath("a@b.com")
+	keepSAPath, err := serviceAccounts.WriteKeep("a@b.com", []byte(`{"type":"service_account"}`))
 	if err != nil {
-		t.Fatalf("KeepServiceAccountPath: %v", err)
-	}
-
-	if _, ensureErr := config.EnsureDataDir(); ensureErr != nil {
-		t.Fatalf("EnsureDataDir: %v", ensureErr)
-	}
-
-	if writeErr := os.WriteFile(keepSAPath, []byte(`{"type":"service_account"}`), 0o600); writeErr != nil {
-		t.Fatalf("write keep sa: %v", writeErr)
+		t.Fatalf("write Keep service account: %v", err)
 	}
 
 	origSA := newServiceAccountTokenSource
@@ -135,7 +189,7 @@ func TestTokenSourceForServiceAccountScopes_KeepUsesKeepFallback(t *testing.T) {
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t"}), nil
 	}
 
-	ts, path, ok, err := tokenSourceForServiceAccountScopes(context.Background(), "keep", "a@b.com", []string{"s1"})
+	ts, path, ok, err := tokenSourceForServiceAccountScopes(ctx, "keep", "a@b.com", []string{"s1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -154,15 +208,18 @@ func TestTokenSourceForServiceAccountScopes_KeepUsesKeepFallback(t *testing.T) {
 }
 
 func TestTokenSourceForServiceAccountScopes_ExplicitDataSkipsRawKeepLegacyFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
-	t.Setenv("GOG_DATA_DIR", filepath.Join(home, "isolated-data"))
-
-	legacyPath, err := config.KeepServiceAccountLegacyPath("a@b.com")
-	if err != nil {
-		t.Fatalf("KeepServiceAccountLegacyPath: %v", err)
+	root := t.TempDir()
+	layout := config.Layout{
+		ConfigDir:      filepath.Join(root, "config"),
+		DataDir:        filepath.Join(root, "isolated-data"),
+		ExplicitConfig: true,
+		ExplicitData:   true,
 	}
+	serviceAccounts := config.NewServiceAccountStore(layout)
+	ctx := WithServiceAccountStoreResolver(context.Background(), func() (*config.ServiceAccountStore, error) {
+		return serviceAccounts, nil
+	})
+	legacyPath := layout.KeepServiceAccountLegacyPath("a@b.com")
 
 	if mkdirErr := os.MkdirAll(filepath.Dir(legacyPath), 0o700); mkdirErr != nil {
 		t.Fatalf("mkdir legacy keep sa: %v", mkdirErr)
@@ -181,7 +238,7 @@ func TestTokenSourceForServiceAccountScopes_ExplicitDataSkipsRawKeepLegacyFallba
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "unexpected"}), nil
 	}
 
-	ts, path, ok, err := tokenSourceForServiceAccountScopes(context.Background(), "keep", "a@b.com", []string{"s1"})
+	ts, path, ok, err := tokenSourceForServiceAccountScopes(ctx, "keep", "a@b.com", []string{"s1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

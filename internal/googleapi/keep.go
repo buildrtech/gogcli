@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/keep/v1"
 	"google.golang.org/api/option"
 
@@ -27,14 +26,12 @@ func NewKeepWithServiceAccount(ctx context.Context, serviceAccountPath, imperson
 		return nil, fmt.Errorf("keep scopes: %w", err)
 	}
 
-	config, err := google.JWTConfigFromJSON(data, scopes...)
+	tokenSource, err := newServiceAccountTokenSource(ctx, data, impersonateEmail, scopes)
 	if err != nil {
-		return nil, fmt.Errorf("parse service account: %w", err)
+		return nil, err
 	}
 
-	config.Subject = impersonateEmail
-
-	svc, err := keep.NewService(ctx, option.WithTokenSource(config.TokenSource(ctx)))
+	svc, err := keep.NewService(ctx, option.WithTokenSource(tokenSource))
 	if err != nil {
 		return nil, fmt.Errorf("create keep service: %w", err)
 	}
