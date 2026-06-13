@@ -164,7 +164,7 @@ func (c *DriveDuCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	items, truncated, err := listDriveTree(ctx, svc, driveTreeOptions{
+	placements, truncated, err := listDrivePlacements(ctx, svc, driveTreeOptions{
 		RootID:        rootID,
 		MaxDepth:      0,
 		MaxItems:      0,
@@ -180,11 +180,11 @@ func (c *DriveDuCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return fmt.Errorf("drive du truncated unexpectedly")
 	}
 
-	summaries, err := summarizeDriveDu(items, rootID, depth)
+	summaries, err := drivereport.Summarize(placements, rootID, depth)
 	if err != nil {
 		return err
 	}
-	sortDriveDu(summaries, c.Sort, c.Order)
+	drivereport.SortSummaries(summaries, c.Sort, c.Order)
 
 	if maxItems > 0 && len(summaries) > maxItems {
 		summaries = summaries[:maxItems]
@@ -254,6 +254,18 @@ const (
 )
 
 func listDriveTree(ctx context.Context, svc *drive.Service, opts driveTreeOptions) ([]driveTreeItem, bool, error) {
+	placements, truncated, err := listDrivePlacements(ctx, svc, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	items := make([]driveTreeItem, 0, len(placements))
+	for _, placement := range placements {
+		items = append(items, driveTreeItemFromPlacement(placement))
+	}
+	return items, truncated, nil
+}
+
+func listDrivePlacements(ctx context.Context, svc *drive.Service, opts driveTreeOptions) ([]drivereport.Placement, bool, error) {
 	fields := strings.TrimSpace(opts.Fields)
 	if fields == "" {
 		fields = driveTreeFields
@@ -272,11 +284,7 @@ func listDriveTree(ctx context.Context, svc *drive.Service, opts driveTreeOption
 	if err != nil {
 		return nil, false, err
 	}
-	items := make([]driveTreeItem, 0, len(placements))
-	for _, placement := range placements {
-		items = append(items, driveTreeItemFromPlacement(placement))
-	}
-	return items, truncated, nil
+	return placements, truncated, nil
 }
 
 type driveTreeSource struct {
