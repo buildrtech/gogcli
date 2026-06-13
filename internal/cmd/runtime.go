@@ -229,33 +229,45 @@ func normalizedRuntime(runtime *app.Runtime) *app.Runtime {
 	if normalized.Services.OpenURL == nil {
 		normalized.Services.OpenURL = defaults.Services.OpenURL
 	}
-	if normalized.Auth.OpenSecretsStore == nil {
-		normalized.Auth.OpenSecretsStore = func() (secrets.Store, error) {
-			if err := configureRuntimeSecrets(&normalized, ""); err != nil {
+	normalizeRuntimeAuth(&normalized, defaults)
+	return &normalized
+}
+
+func normalizeRuntimeAuth(runtime *app.Runtime, defaults *app.Runtime) {
+	if runtime.Auth.OpenSecretsStore == nil {
+		runtime.Auth.OpenSecretsStore = func() (secrets.Store, error) {
+			if err := configureRuntimeSecrets(runtime, ""); err != nil {
 				return nil, err
 			}
-			return secrets.OpenWithConfig(normalized.Layout, normalized.Config)
+			return secrets.OpenWithConfig(runtime.Layout, runtime.Config)
 		}
 	}
-	if normalized.Auth.AuthorizeGoogle == nil {
-		normalized.Auth.AuthorizeGoogle = defaults.Auth.AuthorizeGoogle
+	if runtime.Auth.OpenSecretStore == nil {
+		runtime.Auth.OpenSecretStore = func() (secrets.SecretStore, error) {
+			if err := configureRuntimeSecrets(runtime, ""); err != nil {
+				return nil, err
+			}
+			return secrets.OpenWithConfig(runtime.Layout, runtime.Config)
+		}
 	}
-	if normalized.Auth.StartManageServer == nil {
-		normalized.Auth.StartManageServer = defaults.Auth.StartManageServer
+	if runtime.Auth.AuthorizeGoogle == nil {
+		runtime.Auth.AuthorizeGoogle = defaults.Auth.AuthorizeGoogle
 	}
-	if normalized.Auth.CheckRefreshToken == nil {
-		normalized.Auth.CheckRefreshToken = defaults.Auth.CheckRefreshToken
+	if runtime.Auth.StartManageServer == nil {
+		runtime.Auth.StartManageServer = defaults.Auth.StartManageServer
 	}
-	if normalized.Auth.EnsureKeychainAccess == nil {
-		normalized.Auth.EnsureKeychainAccess = defaults.Auth.EnsureKeychainAccess
+	if runtime.Auth.CheckRefreshToken == nil {
+		runtime.Auth.CheckRefreshToken = defaults.Auth.CheckRefreshToken
 	}
-	if normalized.Auth.FetchAuthorizedIdentity == nil {
-		normalized.Auth.FetchAuthorizedIdentity = defaults.Auth.FetchAuthorizedIdentity
+	if runtime.Auth.EnsureKeychainAccess == nil {
+		runtime.Auth.EnsureKeychainAccess = defaults.Auth.EnsureKeychainAccess
 	}
-	if normalized.Auth.ManualAuthURL == nil {
-		normalized.Auth.ManualAuthURL = defaults.Auth.ManualAuthURL
+	if runtime.Auth.FetchAuthorizedIdentity == nil {
+		runtime.Auth.FetchAuthorizedIdentity = defaults.Auth.FetchAuthorizedIdentity
 	}
-	return &normalized
+	if runtime.Auth.ManualAuthURL == nil {
+		runtime.Auth.ManualAuthURL = defaults.Auth.ManualAuthURL
+	}
 }
 
 func configureRuntimeConfig(runtime *app.Runtime, homeOverride string) error {
@@ -681,9 +693,9 @@ func slidesService(ctx context.Context, account string) (*slides.Service, error)
 
 func zoomMeetingClient(ctx context.Context, alias string) (app.ZoomMeetingClient, error) {
 	if runtime, ok := app.FromContext(ctx); ok && runtime.Services.Zoom != nil {
-		return runtime.Services.Zoom(alias)
+		return runtime.Services.Zoom(ctx, alias)
 	}
-	return newZoomMeetingClient(alias)
+	return newZoomMeetingClient(ctx, alias)
 }
 
 func driveDownloadRequest(ctx context.Context, svc *drive.Service, fileID string) (*http.Response, error) {

@@ -13,6 +13,7 @@
 - Classroom: require an archived course before deletion with actionable lifecycle guidance, and prevent live tests from leaving consumer-account courses behind.
 - Gmail: bind watch state to the selected runtime state directory and serialize atomic updates across concurrent watch processes.
 - Gmail: bind tracking configuration to the selected runtime state directory and preserve concurrent account updates with shared atomic locking.
+- Zoom: bind credential metadata and encrypted secret/token storage to the selected runtime layout, with consistent alias canonicalization.
 
 ## 0.25.0 - 2026-06-12
 
