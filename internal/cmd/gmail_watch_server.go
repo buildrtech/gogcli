@@ -158,13 +158,22 @@ func (s *gmailWatchServer) oidcAudience(r *http.Request) string {
 }
 
 func (s *gmailWatchServer) sendHook(ctx context.Context, payload *gmailHookPayload) error {
+	delivery := s.deliverHook(ctx, payload)
+	if delivery.Record {
+		_ = s.store.RecordDelivery(delivery.Status, delivery.Note, s.currentTime())
+	}
+
+	return delivery.Err
+}
+
+func (s *gmailWatchServer) deliverHook(ctx context.Context, payload *gmailHookPayload) gmailwatch.DeliveryResult {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return gmailwatch.DeliveryResult{Err: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.HookURL, bytes.NewReader(data))
 	if err != nil {
-		return err
+		return gmailwatch.DeliveryResult{Err: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if s.cfg.HookToken != "" {
@@ -172,23 +181,29 @@ func (s *gmailWatchServer) sendHook(ctx context.Context, payload *gmailHookPaylo
 	}
 	resp, err := s.hookClient.Do(req)
 	if err != nil {
-		_ = s.store.RecordDelivery(gmailwatch.DeliveryStatusError, err.Error(), s.currentTime())
-
-		return err
+		return gmailwatch.DeliveryResult{
+			Status: gmailwatch.DeliveryStatusError,
+			Note:   err.Error(),
+			Err:    err,
+			Record: true,
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_ = s.store.RecordDelivery(
-			gmailwatch.DeliveryStatusHTTPError,
-			fmt.Sprintf("status %d", resp.StatusCode),
-			s.currentTime(),
-		)
+		note := fmt.Sprintf("status %d", resp.StatusCode)
 
-		return fmt.Errorf("hook status %d", resp.StatusCode)
+		return gmailwatch.DeliveryResult{
+			Status: gmailwatch.DeliveryStatusHTTPError,
+			Note:   note,
+			Err:    fmt.Errorf("hook %s", note),
+			Record: true,
+		}
 	}
-	_ = s.store.RecordDelivery(gmailwatch.DeliveryStatusOK, "", s.currentTime())
 
-	return nil
+	return gmailwatch.DeliveryResult{
+		Status: gmailwatch.DeliveryStatusOK,
+		Record: true,
+	}
 }
 
 func parsePubSubPush(r *http.Request) (*pubsubPushEnvelope, error) {

@@ -45,16 +45,83 @@ func (e *RateLimitError) Unwrap() error {
 	return e.Cause
 }
 
+type DeliveryResult struct {
+	Status string
+	Note   string
+	Err    error
+	Record bool
+}
+
+type ProcessedPayload struct {
+	Payload    *Payload
+	HookFailed bool
+}
+
+type HookDeliveryError struct {
+	Err error
+}
+
+func (e *HookDeliveryError) Error() string {
+	return fmt.Sprintf("hook delivery failed: %v", e.Err)
+}
+
+func (e *HookDeliveryError) Unwrap() error {
+	return e.Err
+}
+
 type Processor struct {
 	Config              ProcessorConfig
 	Repository          *Repository
 	NewSource           func(context.Context) (Source, error)
+	Deliver             func(context.Context, *Payload) DeliveryResult
 	Now                 func() time.Time
 	Sleep               func(context.Context, time.Duration) error
 	IsStaleHistoryError func(error) bool
 	RateLimitUntil      func(error, time.Time) (time.Time, bool)
 	Logf                func(string, ...any)
 	Warnf               func(string, ...any)
+}
+
+func (p *Processor) Process(ctx context.Context, notification Notification) (*ProcessedPayload, error) {
+	if p.Repository == nil {
+		return nil, ErrMissingRepository
+	}
+
+	progressBefore := p.Repository.Get()
+
+	payload, err := p.Handle(ctx, notification)
+	if err != nil {
+		return nil, err
+	}
+
+	if payload == nil {
+		return nil, ErrNoNewMessages
+	}
+
+	processed := &ProcessedPayload{Payload: payload}
+	if p.Deliver == nil {
+		return processed, nil
+	}
+
+	delivery := p.Deliver(ctx, payload)
+	if delivery.Record {
+		if recordErr := p.Repository.RecordDelivery(delivery.Status, delivery.Note, p.currentTime()); recordErr != nil {
+			p.warnf("watch: failed to update delivery state: %v", recordErr)
+		}
+	}
+
+	if delivery.Err == nil {
+		return processed, nil
+	}
+
+	p.warnf("watch: hook failed: %v", delivery.Err)
+	processed.HookFailed = true
+
+	if _, restoreErr := p.Repository.RestoreProgress(progressBefore, payload.HistoryID, notification.MessageID); restoreErr != nil {
+		p.warnf("watch: failed to preserve retry state after hook failure: %v", restoreErr)
+	}
+
+	return processed, &HookDeliveryError{Err: delivery.Err}
 }
 
 func (p *Processor) Handle(ctx context.Context, notification Notification) (*Payload, error) {

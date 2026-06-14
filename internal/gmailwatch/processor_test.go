@@ -231,6 +231,82 @@ func TestProcessorSkipsAllExcludedMessages(t *testing.T) {
 	}
 }
 
+func TestProcessorProcessRecordsDelivery(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(600, 0)
+	repository := NewMemory(State{HistoryID: "100"}, Options{})
+	source := &processorSource{
+		history: HistoryPage{
+			HistoryID: "200",
+			Records:   []HistoryRecord{{Added: []string{"m1"}}},
+		},
+		messageBatches: []MessageBatch{{Messages: []Message{{ID: "m1"}}}},
+	}
+	processor := newTestProcessor(repository, source, now)
+	processor.Deliver = func(context.Context, *Payload) DeliveryResult {
+		return DeliveryResult{Status: DeliveryStatusOK, Record: true}
+	}
+
+	processed, err := processor.Process(context.Background(), Notification{HistoryID: "200", MessageID: "push"})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	if processed == nil || processed.Payload == nil || processed.HookFailed {
+		t.Fatalf("processed = %#v", processed)
+	}
+
+	state := repository.Get()
+	if state.LastDeliveryStatus != DeliveryStatusOK || state.LastDeliveryAtMs != now.UnixMilli() {
+		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestProcessorProcessRestoresProgressAfterDeliveryFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(700, 0)
+	repository := NewMemory(State{HistoryID: "100", LastPushMessageID: "before"}, Options{})
+	source := &processorSource{
+		history: HistoryPage{
+			HistoryID: "200",
+			Records:   []HistoryRecord{{Added: []string{"m1"}}},
+		},
+		messageBatches: []MessageBatch{{Messages: []Message{{ID: "m1"}}}},
+	}
+	deliveryErr := errors.New("delivery failed") //nolint:err113 // Test-only injected failure.
+	processor := newTestProcessor(repository, source, now)
+	processor.Deliver = func(context.Context, *Payload) DeliveryResult {
+		return DeliveryResult{
+			Status: DeliveryStatusHTTPError,
+			Note:   "status 502",
+			Err:    deliveryErr,
+			Record: true,
+		}
+	}
+
+	processed, err := processor.Process(context.Background(), Notification{HistoryID: "200", MessageID: "push"})
+
+	var hookErr *HookDeliveryError
+	if !errors.As(err, &hookErr) || !errors.Is(err, deliveryErr) {
+		t.Fatalf("Process error = %v", err)
+	}
+
+	if processed == nil || !processed.HookFailed {
+		t.Fatalf("processed = %#v", processed)
+	}
+
+	state := repository.Get()
+	if state.HistoryID != "100" || state.LastPushMessageID != "before" {
+		t.Fatalf("progress state = %#v", state)
+	}
+
+	if state.LastDeliveryStatus != DeliveryStatusHTTPError || state.LastDeliveryStatusNote != "status 502" {
+		t.Fatalf("delivery state = %#v", state)
+	}
+}
+
 func newTestProcessor(repository *Repository, source Source, now time.Time) *Processor {
 	return &Processor{
 		Config: ProcessorConfig{
