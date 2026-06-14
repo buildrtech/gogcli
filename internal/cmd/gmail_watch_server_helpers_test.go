@@ -290,23 +290,23 @@ func TestDecodeGmailPushPayload(t *testing.T) {
 
 func TestSharedTokenAndBearerEdgeCases(t *testing.T) {
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hook?token=query", nil)
-	if sharedTokenMatches(r, "") {
+	if gmailwatch.SharedTokenMatches(r, "") {
 		t.Fatalf("expected false for empty expected token")
 	}
-	if sharedTokenMatches(r, "nope") {
+	if gmailwatch.SharedTokenMatches(r, "nope") {
 		t.Fatalf("expected false for mismatch")
 	}
-	if !sharedTokenMatches(r, "query") {
+	if !gmailwatch.SharedTokenMatches(r, "query") {
 		t.Fatalf("expected query token match")
 	}
 
-	if got := bearerToken(&http.Request{}); got != "" {
+	if got := gmailwatch.BearerToken(&http.Request{}); got != "" {
 		t.Fatalf("expected empty bearer")
 	}
-	if got := bearerToken(&http.Request{Header: http.Header{"Authorization": []string{"token abc"}}}); got != "" {
+	if got := gmailwatch.BearerToken(&http.Request{Header: http.Header{"Authorization": []string{"token abc"}}}); got != "" {
 		t.Fatalf("expected empty bearer for non-bearer scheme")
 	}
-	if got := bearerToken(&http.Request{Header: http.Header{"Authorization": []string{"Bearer"}}}); got != "" {
+	if got := gmailwatch.BearerToken(&http.Request{Header: http.Header{"Authorization": []string{"Bearer"}}}); got != "" {
 		t.Fatalf("expected empty bearer for missing token")
 	}
 }

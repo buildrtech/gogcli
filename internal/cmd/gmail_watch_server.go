@@ -1,10 +1,7 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -61,48 +58,20 @@ func (s *gmailWatchServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *gmailWatchServer) authorize(r *http.Request) bool {
-	if s.cfg.VerifyOIDC {
-		bearer := bearerToken(r)
-		if bearer != "" {
-			if ok, err := verifyOIDCToken(r.Context(), s.validator, bearer, s.oidcAudience(r), s.cfg.OIDCEmail); ok {
-				return true
-			} else if err != nil {
-				s.warnf("watch: oidc verify failed: %v", err)
-			}
-		}
-		if s.cfg.SharedToken != "" {
-			return sharedTokenMatches(r, s.cfg.SharedToken)
-		}
-		return false
+	authorizer := gmailwatch.Authorizer{
+		Config: gmailwatch.AuthConfig{
+			VerifyOIDC:   s.cfg.VerifyOIDC,
+			OIDCEmail:    s.cfg.OIDCEmail,
+			OIDCAudience: s.cfg.OIDCAudience,
+			SharedToken:  s.cfg.SharedToken,
+		},
+		Verify: func(ctx context.Context, token, audience, email string) (bool, error) {
+			return verifyOIDCToken(ctx, s.validator, token, audience, email)
+		},
+		Warnf: s.warnf,
 	}
-	if s.cfg.SharedToken == "" {
-		return true
-	}
-	return sharedTokenMatches(r, s.cfg.SharedToken)
-}
 
-func (s *gmailWatchServer) oidcAudience(r *http.Request) string {
-	if s.cfg.OIDCAudience != "" {
-		return s.cfg.OIDCAudience
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if xf := r.Header.Get("X-Forwarded-Proto"); xf != "" {
-		parts := strings.Split(xf, ",")
-		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
-			scheme = strings.TrimSpace(parts[0])
-		}
-	}
-	host := r.Host
-	if xf := r.Header.Get("X-Forwarded-Host"); xf != "" {
-		parts := strings.Split(xf, ",")
-		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
-			host = strings.TrimSpace(parts[0])
-		}
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, host, r.URL.Path)
+	return authorizer.Authorize(r)
 }
 
 func (s *gmailWatchServer) sendHook(ctx context.Context, payload *gmailHookPayload) error {
@@ -115,72 +84,13 @@ func (s *gmailWatchServer) sendHook(ctx context.Context, payload *gmailHookPaylo
 }
 
 func (s *gmailWatchServer) deliverHook(ctx context.Context, payload *gmailHookPayload) gmailwatch.DeliveryResult {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return gmailwatch.DeliveryResult{Err: err}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.HookURL, bytes.NewReader(data))
-	if err != nil {
-		return gmailwatch.DeliveryResult{Err: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if s.cfg.HookToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.HookToken)
-	}
-	resp, err := s.hookClient.Do(req)
-	if err != nil {
-		return gmailwatch.DeliveryResult{
-			Status: gmailwatch.DeliveryStatusError,
-			Note:   err.Error(),
-			Err:    err,
-			Record: true,
-		}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		note := fmt.Sprintf("status %d", resp.StatusCode)
-
-		return gmailwatch.DeliveryResult{
-			Status: gmailwatch.DeliveryStatusHTTPError,
-			Note:   note,
-			Err:    fmt.Errorf("hook %s", note),
-			Record: true,
-		}
+	sender := gmailwatch.HookSender{
+		URL:    s.cfg.HookURL,
+		Token:  s.cfg.HookToken,
+		Client: s.hookClient,
 	}
 
-	return gmailwatch.DeliveryResult{
-		Status: gmailwatch.DeliveryStatusOK,
-		Record: true,
-	}
-}
-
-func bearerToken(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
-	}
-	parts := strings.SplitN(auth, " ", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	if !strings.EqualFold(parts[0], "bearer") {
-		return ""
-	}
-	return strings.TrimSpace(parts[1])
-}
-
-func sharedTokenMatches(r *http.Request, expected string) bool {
-	if expected == "" {
-		return false
-	}
-	token := r.Header.Get("x-gog-token")
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
-	if token == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
+	return sender.Send(ctx, payload)
 }
 
 func verifyOIDCToken(ctx context.Context, validator *idtoken.Validator, token, audience, expectedEmail string) (bool, error) {
