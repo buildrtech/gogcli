@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	version = "0.12.0-dev"
-	commit  = ""
-	date    = ""
+	version      = "0.12.0-dev"
+	commit       = ""
+	date         = ""
+	distribution = "buildr"
 )
 
 func VersionString() string {
@@ -20,16 +21,14 @@ func VersionString() string {
 	if v == "" {
 		v = "dev"
 	}
-	if strings.TrimSpace(commit) == "" && strings.TrimSpace(date) == "" {
-		return v
+	parts := []string{distribution}
+	if c := strings.TrimSpace(commit); c != "" {
+		parts = append(parts, c)
 	}
-	if strings.TrimSpace(commit) == "" {
-		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(date))
+	if d := strings.TrimSpace(date); d != "" {
+		parts = append(parts, d)
 	}
-	if strings.TrimSpace(date) == "" {
-		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(commit))
-	}
-	return fmt.Sprintf("%s (%s %s)", v, strings.TrimSpace(commit), strings.TrimSpace(date))
+	return fmt.Sprintf("%s (%s)", v, strings.Join(parts, " "))
 }
 
 type VersionCmd struct{}
@@ -37,9 +36,10 @@ type VersionCmd struct{}
 func (c *VersionCmd) Run(ctx context.Context) error {
 	if outfmt.IsJSON(ctx) {
 		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
-			"version": strings.TrimSpace(version),
-			"commit":  strings.TrimSpace(commit),
-			"date":    strings.TrimSpace(date),
+			"version":      strings.TrimSpace(version),
+			"commit":       strings.TrimSpace(commit),
+			"date":         strings.TrimSpace(date),
+			"distribution": distribution,
 		})
 	}
 	fmt.Fprintln(os.Stdout, VersionString())

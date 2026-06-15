@@ -2,7 +2,10 @@
 
 ## Unreleased
 
+## 0.12.1 - 2026-06-15
+
 ### Added
+- CLI: identify the Buildr fork in `gog --version` and expose `distribution: "buildr"` from `gog --json version`.
 - Gmail: add `gmail autoreply` to reply once to matching messages, label the thread for dedupe, and optionally archive/mark read. Includes docs and regression coverage for skip/reply flows.
 
 ## 0.12.0 - 2026-03-09

@@ -34,7 +34,7 @@ func TestVersionStringVariantsMore(t *testing.T) {
 	version = "1.2.3"
 	commit = ""
 	date = ""
-	if got := VersionString(); got != "1.2.3" {
+	if got := VersionString(); got != "1.2.3 (buildr)" {
 		t.Fatalf("unexpected version: %q", got)
 	}
 
