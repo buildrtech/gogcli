@@ -2,6 +2,10 @@
 
 ## 0.28.1 - Unreleased
 
+### Changed
+
+- CLI: identify the Buildr fork in `gog --version` and expose `distribution: "buildr"` from `gog --json version`.
+
 ## 0.28.0 - 2026-06-15
 
 ### Added

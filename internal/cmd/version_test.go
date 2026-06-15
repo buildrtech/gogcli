@@ -17,19 +17,19 @@ func TestVersionStringVariants(t *testing.T) {
 	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
 
 	version, commit, date = "v1", "", ""
-	if got := VersionString(); got != "v1" {
+	if got := VersionString(); got != "v1 (buildr)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "abc", ""
-	if got := VersionString(); got != "v1 (abc)" {
+	if got := VersionString(); got != "v1 (buildr abc)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "", "2025-01-01"
-	if got := VersionString(); got != "v1 (2025-01-01)" {
+	if got := VersionString(); got != "v1 (buildr 2025-01-01)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "abc", "2025-01-01"
-	if got := VersionString(); got != "v1 (abc 2025-01-01)" {
+	if got := VersionString(); got != "v1 (buildr abc 2025-01-01)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestVersionStringUsesModuleVersionFallback(t *testing.T) {
 		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
 	}
 
-	if got := VersionString(); got != "v1.2.3" {
+	if got := VersionString(); got != "v1.2.3 (buildr)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
@@ -57,7 +57,7 @@ func TestVersionStringPrefersInjectedVersion(t *testing.T) {
 		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
 	}
 
-	if got := VersionString(); got != "v9.9.9" {
+	if got := VersionString(); got != "v9.9.9 (buildr)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
@@ -131,14 +131,15 @@ func TestVersionCmd_JSON(t *testing.T) {
 	})
 
 	var parsed struct {
-		Version string `json:"version"`
-		Commit  string `json:"commit"`
-		Date    string `json:"date"`
+		Version      string `json:"version"`
+		Commit       string `json:"commit"`
+		Date         string `json:"date"`
+		Distribution string `json:"distribution"`
 	}
 	if err := json.Unmarshal([]byte(jsonOut), &parsed); err != nil {
 		t.Fatalf("json parse: %v", err)
 	}
-	if parsed.Version != "v2" || parsed.Commit != "c1" || parsed.Date != "d1" {
+	if parsed.Version != "v2" || parsed.Commit != "c1" || parsed.Date != "d1" || parsed.Distribution != "buildr" {
 		t.Fatalf("unexpected json: %#v", parsed)
 	}
 }

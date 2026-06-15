@@ -19,6 +19,7 @@ var (
 	version       = sentinelDev
 	commit        = ""
 	date          = ""
+	distribution  = "buildr"
 	readBuildInfo = debug.ReadBuildInfo
 )
 
@@ -42,16 +43,14 @@ func resolvedVersion() string {
 
 func VersionString() string {
 	v := resolvedVersion()
-	if strings.TrimSpace(commit) == "" && strings.TrimSpace(date) == "" {
-		return v
+	parts := []string{distribution}
+	if c := strings.TrimSpace(commit); c != "" {
+		parts = append(parts, c)
 	}
-	if strings.TrimSpace(commit) == "" {
-		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(date))
+	if d := strings.TrimSpace(date); d != "" {
+		parts = append(parts, d)
 	}
-	if strings.TrimSpace(date) == "" {
-		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(commit))
-	}
-	return fmt.Sprintf("%s (%s %s)", v, strings.TrimSpace(commit), strings.TrimSpace(date))
+	return fmt.Sprintf("%s (%s)", v, strings.Join(parts, " "))
 }
 
 type VersionCmd struct{}
@@ -60,9 +59,10 @@ func (c *VersionCmd) Run(ctx context.Context) error {
 	stdout := stdoutWriter(ctx)
 	if outfmt.IsJSON(ctx) {
 		return outfmt.WriteJSON(ctx, stdout, map[string]any{
-			"version": resolvedVersion(),
-			"commit":  strings.TrimSpace(commit),
-			"date":    strings.TrimSpace(date),
+			"version":      resolvedVersion(),
+			"commit":       strings.TrimSpace(commit),
+			"date":         strings.TrimSpace(date),
+			"distribution": distribution,
 		})
 	}
 	fmt.Fprintln(stdout, VersionString())
