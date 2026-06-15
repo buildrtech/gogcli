@@ -4,18 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	keepapi "google.golang.org/api/keep/v1"
 
 	"github.com/steipete/gogcli/internal/config"
-	"github.com/steipete/gogcli/internal/googleapi"
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
 )
-
-var newKeepServiceWithSA = googleapi.NewKeepWithServiceAccount
 
 type KeepCmd struct {
 	ServiceAccount string `name:"service-account" help:"Path to service account JSON file"`
@@ -39,6 +35,9 @@ type KeepListCmd struct {
 
 func (c *KeepListCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd) error {
 	u := ui.FromContext(ctx)
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 
 	svc, err := getKeepService(ctx, flags, keep)
 	if err != nil {
@@ -60,24 +59,13 @@ func (c *KeepListCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd) 
 		return resp.Notes, resp.NextPageToken, nil
 	}
 
-	var notes []*keepapi.Note
-	nextPageToken := ""
-	if c.All {
-		all, err := collectAllPages(c.Page, fetch)
-		if err != nil {
-			return err
-		}
-		notes = all
-	} else {
-		var err error
-		notes, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	notes, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"notes":         notes,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -104,7 +92,7 @@ func (c *KeepListCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd) 
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", n.Name, title, n.UpdateTime)
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -142,7 +130,10 @@ func (c *KeepSearchCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 	u := ui.FromContext(ctx)
 
 	if strings.TrimSpace(c.Query) == "" {
-		return fmt.Errorf("search query cannot be empty")
+		return usage("search query cannot be empty")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
 	}
 
 	svc, err := getKeepService(ctx, flags, keep)
@@ -175,7 +166,7 @@ func (c *KeepSearchCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"notes": allNotes,
 			"query": c.Query,
 			"count": len(allNotes),
@@ -183,7 +174,7 @@ func (c *KeepSearchCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 	}
 
 	if len(allNotes) == 0 {
-		u.Err().Printf("No notes matching %q", c.Query)
+		u.Err().Linef("No notes matching %q", c.Query)
 		return nil
 	}
 
@@ -197,7 +188,7 @@ func (c *KeepSearchCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", n.Name, title, n.UpdateTime)
 	}
-	u.Err().Printf("Found %d notes matching %q", len(allNotes), c.Query)
+	u.Err().Linef("Found %d notes matching %q", len(allNotes), c.Query)
 	return nil
 }
 
@@ -224,23 +215,23 @@ func (c *KeepGetCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd) e
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"note": note})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"note": note})
 	}
 
-	u.Out().Printf("name\t%s", note.Name)
-	u.Out().Printf("title\t%s", note.Title)
-	u.Out().Printf("created\t%s", note.CreateTime)
-	u.Out().Printf("updated\t%s", note.UpdateTime)
-	u.Out().Printf("trashed\t%v", note.Trashed)
+	u.Out().Linef("name\t%s", note.Name)
+	u.Out().Linef("title\t%s", note.Title)
+	u.Out().Linef("created\t%s", note.CreateTime)
+	u.Out().Linef("updated\t%s", note.UpdateTime)
+	u.Out().Linef("trashed\t%v", note.Trashed)
 	if note.Body != nil && note.Body.Text != nil {
 		u.Out().Println("")
 		u.Out().Println(note.Body.Text.Text)
 	}
 	if len(note.Attachments) > 0 {
 		u.Out().Println("")
-		u.Out().Printf("attachments\t%d", len(note.Attachments))
+		u.Out().Linef("attachments\t%d", len(note.Attachments))
 		for _, a := range note.Attachments {
-			u.Out().Printf("  %s\t%s", a.Name, a.MimeType)
+			u.Out().Linef("  %s\t%s", a.Name, a.MimeType)
 		}
 	}
 	return nil
@@ -257,7 +248,7 @@ func (c *KeepAttachmentCmd) Run(ctx context.Context, flags *RootFlags, keep *Kee
 
 	name := strings.TrimSpace(c.AttachmentName)
 	if !strings.Contains(name, "/attachments/") {
-		return fmt.Errorf("invalid attachment name format, expected: notes/<noteId>/attachments/<attachmentId>")
+		return usage("invalid attachment name format, expected: notes/<noteId>/attachments/<attachmentId>")
 	}
 
 	outPath := strings.TrimSpace(c.Out)
@@ -303,15 +294,15 @@ func (c *KeepAttachmentCmd) Run(ctx context.Context, flags *RootFlags, keep *Kee
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"downloaded": true,
 			"path":       outPath,
 			"bytes":      written,
 		})
 	}
 
-	u.Out().Printf("path\t%s", outPath)
-	u.Out().Printf("bytes\t%d", written)
+	u.Out().Linef("path\t%s", outPath)
+	u.Out().Linef("bytes\t%d", written)
 	return nil
 }
 
@@ -380,12 +371,12 @@ func (c *KeepCreateCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"note": created})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"note": created})
 	}
 
-	u.Out().Printf("name\t%s", created.Name)
-	u.Out().Printf("title\t%s", created.Title)
-	u.Out().Printf("created\t%s", created.CreateTime)
+	u.Out().Linef("name\t%s", created.Name)
+	u.Out().Linef("title\t%s", created.Title)
+	u.Out().Linef("created\t%s", created.CreateTime)
 	return nil
 }
 
@@ -404,7 +395,9 @@ func (c *KeepDeleteCmd) Run(ctx context.Context, flags *RootFlags, keep *KeepCmd
 		name = "notes/" + name
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete note %s", name)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "keep.delete", map[string]any{
+		"name": name,
+	}, fmt.Sprintf("delete note %s", name)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -428,7 +421,7 @@ func getKeepService(ctx context.Context, flags *RootFlags, keepCmd *KeepCmd) (*k
 		if keepCmd.Impersonate == "" {
 			return nil, fmt.Errorf("--impersonate is required when using --service-account")
 		}
-		return newKeepServiceWithSA(ctx, keepCmd.ServiceAccount, keepCmd.Impersonate)
+		return keepServiceWithServiceAccount(ctx, keepCmd.ServiceAccount, keepCmd.Impersonate)
 	}
 
 	account, err := requireAccount(flags)
@@ -436,28 +429,16 @@ func getKeepService(ctx context.Context, flags *RootFlags, keepCmd *KeepCmd) (*k
 		return nil, err
 	}
 
-	genericSAPath, err := config.ServiceAccountPath(account)
+	serviceAccounts, err := commandServiceAccountStore(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, statErr := os.Stat(genericSAPath); statErr == nil {
-		return newKeepServiceWithSA(ctx, genericSAPath, account)
-	}
-
-	saPath, err := config.KeepServiceAccountPath(account)
+	file, exists, err := serviceAccounts.Existing(account, true)
 	if err != nil {
 		return nil, err
 	}
-
-	if _, statErr := os.Stat(saPath); statErr == nil {
-		return newKeepServiceWithSA(ctx, saPath, account)
-	}
-
-	legacyPath, legacyErr := config.KeepServiceAccountLegacyPath(account)
-	if legacyErr == nil {
-		if _, statErr := os.Stat(legacyPath); statErr == nil {
-			return newKeepServiceWithSA(ctx, legacyPath, account)
-		}
+	if exists {
+		return keepServiceWithServiceAccount(ctx, file.Path, account)
 	}
 
 	return nil, usage("Keep is Workspace-only and requires a service account. Configure it with: gog auth service-account set <email> --key <service-account.json> (or legacy: gog auth keep <email> --key <service-account.json>)")

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/gmail/v1"
@@ -31,8 +30,9 @@ func (c *GmailForwardingListCmd) Run(ctx context.Context, flags *RootFlags) erro
 	if err != nil {
 		return err
 	}
-	rows := make([]gmailEmailStatusRow, 0, len(resp.ForwardingAddresses))
-	for _, f := range resp.ForwardingAddresses {
+	addresses := normalizeGmailSettingsItems(resp.ForwardingAddresses)
+	rows := make([]gmailEmailStatusRow, 0, len(addresses))
+	for _, f := range addresses {
 		if f == nil {
 			continue
 		}
@@ -41,7 +41,7 @@ func (c *GmailForwardingListCmd) Run(ctx context.Context, flags *RootFlags) erro
 			Status: f.VerificationStatus,
 		})
 	}
-	return writeGmailEmailStatusList(ctx, "forwardingAddresses", resp.ForwardingAddresses, "No forwarding addresses", rows)
+	return writeGmailEmailStatusList(ctx, "forwardingAddresses", addresses, "No forwarding addresses", rows)
 }
 
 type GmailForwardingGetCmd struct {
@@ -57,6 +57,9 @@ func (c *GmailForwardingGetCmd) Run(ctx context.Context, flags *RootFlags) error
 	forwardingEmail := strings.TrimSpace(c.ForwardingEmail)
 	if forwardingEmail == "" {
 		return usage("empty forwardingEmail")
+	}
+	if validateErr := validateGmailSettingsEmail("forwardingEmail", forwardingEmail); validateErr != nil {
+		return validateErr
 	}
 	address, err := svc.Users.Settings.ForwardingAddresses.Get("me", forwardingEmail).Do()
 	if err != nil {
@@ -76,6 +79,9 @@ func (c *GmailForwardingCreateCmd) Run(ctx context.Context, flags *RootFlags) er
 	forwardingEmail := strings.TrimSpace(c.ForwardingEmail)
 	if forwardingEmail == "" {
 		return usage("empty forwardingEmail")
+	}
+	if err := validateGmailSettingsEmail("forwardingEmail", forwardingEmail); err != nil {
+		return err
 	}
 
 	if err := dryRunExit(ctx, flags, "gmail.forwarding.create", map[string]any{
@@ -119,8 +125,13 @@ func (c *GmailForwardingDeleteCmd) Run(ctx context.Context, flags *RootFlags) er
 	if forwardingEmail == "" {
 		return usage("empty forwardingEmail")
 	}
+	if err := validateGmailSettingsEmail("forwardingEmail", forwardingEmail); err != nil {
+		return err
+	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete gmail forwarding address %s", forwardingEmail)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.forwarding.delete", map[string]any{
+		"forwarding_email": forwardingEmail,
+	}, fmt.Sprintf("delete gmail forwarding address %s", forwardingEmail)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -135,12 +146,12 @@ func (c *GmailForwardingDeleteCmd) Run(ctx context.Context, flags *RootFlags) er
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"success":         true,
 			"forwardingEmail": forwardingEmail,
 		})
 	}
 
-	ui.FromContext(ctx).Out().Printf("Forwarding address %s deleted successfully", forwardingEmail)
+	ui.FromContext(ctx).Out().Linef("Forwarding address %s deleted successfully", forwardingEmail)
 	return nil
 }

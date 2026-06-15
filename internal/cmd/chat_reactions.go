@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/chat/v1"
@@ -63,7 +61,7 @@ func (c *ChatMessagesReactionsCreateCmd) Run(ctx context.Context, flags *RootFla
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -77,10 +75,10 @@ func (c *ChatMessagesReactionsCreateCmd) Run(ctx context.Context, flags *RootFla
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"reaction": resp})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"reaction": resp})
 	}
 
-	u.Out().Printf("resource\t%s", resp.Name)
+	u.Out().Linef("resource\t%s", resp.Name)
 	return nil
 }
 
@@ -99,6 +97,9 @@ func (c *ChatMessagesReactionsListCmd) Run(ctx context.Context, flags *RootFlags
 	if err != nil {
 		return usage("required: message (full resource path, or bare ID with --space)")
 	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 
 	account, err := requireAccount(flags)
 	if err != nil {
@@ -108,7 +109,7 @@ func (c *ChatMessagesReactionsListCmd) Run(ctx context.Context, flags *RootFlags
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -120,27 +121,16 @@ func (c *ChatMessagesReactionsListCmd) Run(ctx context.Context, flags *RootFlags
 		if strings.TrimSpace(pageToken) != "" {
 			call = call.PageToken(pageToken)
 		}
-		resp, err := call.Do()
-		if err != nil {
-			return nil, "", err
+		resp, callErr := call.Do()
+		if callErr != nil {
+			return nil, "", callErr
 		}
 		return resp.Reactions, resp.NextPageToken, nil
 	}
 
-	var reactions []*chat.Reaction
-	nextPageToken := ""
-	if c.All {
-		all, err := collectAllPages(c.Page, fetch)
-		if err != nil {
-			return err
-		}
-		reactions = all
-	} else {
-		var err error
-		reactions, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	reactions, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
@@ -160,7 +150,7 @@ func (c *ChatMessagesReactionsListCmd) Run(ctx context.Context, flags *RootFlags
 				User:     reactionUser(r),
 			})
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"reactions":     items,
 			"nextPageToken": nextPageToken,
 		})
@@ -171,16 +161,15 @@ func (c *ChatMessagesReactionsListCmd) Run(ctx context.Context, flags *RootFlags
 		return nil
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "RESOURCE\tEMOJI\tUSER")
-	for _, r := range reactions {
-		if r == nil {
-			continue
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", r.Name, reactionEmoji(r), reactionUser(r))
+	if err := outfmt.WriteTable(
+		ctx,
+		stdoutWriter(ctx),
+		compactChatRows(reactions),
+		chatReactionColumns(),
+	); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all")
 	return nil
 }
 
@@ -194,6 +183,10 @@ func (c *ChatMessagesReactionsDeleteCmd) Run(ctx context.Context, flags *RootFla
 	reaction := strings.TrimSpace(c.Reaction)
 	if reaction == "" {
 		return usage("required: reaction")
+	}
+	reaction, err := normalizeReaction(reaction)
+	if err != nil {
+		return usage("required: reaction resource (spaces/.../messages/.../reactions/...)")
 	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "chat.messages.reactions.delete", map[string]any{
@@ -210,7 +203,7 @@ func (c *ChatMessagesReactionsDeleteCmd) Run(ctx context.Context, flags *RootFla
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -221,10 +214,10 @@ func (c *ChatMessagesReactionsDeleteCmd) Run(ctx context.Context, flags *RootFla
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"deleted": reaction})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"deleted": reaction})
 	}
 
-	u.Out().Printf("deleted\t%s", reaction)
+	u.Out().Linef("deleted\t%s", reaction)
 	return nil
 }
 

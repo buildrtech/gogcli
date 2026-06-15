@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"context"
-	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +10,8 @@ import (
 	"google.golang.org/api/gmail/v1"
 
 	"github.com/steipete/gogcli/internal/config"
+	"github.com/steipete/gogcli/internal/gmailcontent"
+	"github.com/steipete/gogcli/internal/mailmime"
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
 )
@@ -17,7 +19,7 @@ import (
 type GmailDraftsCmd struct {
 	List   GmailDraftsListCmd   `cmd:"" name:"list" aliases:"ls" help:"List drafts"`
 	Get    GmailDraftsGetCmd    `cmd:"" name:"get" aliases:"info,show" help:"Get draft details"`
-	Delete GmailDraftsDeleteCmd `cmd:"" name:"delete" aliases:"rm,del,remove" help:"Delete a draft"`
+	Delete GmailDraftsDeleteCmd `cmd:"" name:"delete" aliases:"rm,del,remove" help:"Permanently delete a draft (not recoverable; drafts are not moved to Trash)"`
 	Send   GmailDraftsSendCmd   `cmd:"" name:"send" aliases:"post" help:"Send a draft"`
 	Create GmailDraftsCreateCmd `cmd:"" name:"create" aliases:"add,new" help:"Create a draft"`
 	Update GmailDraftsUpdateCmd `cmd:"" name:"update" aliases:"edit,set" help:"Update a draft"`
@@ -32,6 +34,9 @@ type GmailDraftsListCmd struct {
 
 func (c *GmailDraftsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	if err := validateGmailMaxResults(c.Max); err != nil {
+		return err
+	}
 	_, svc, err := requireGmailService(ctx, flags)
 	if err != nil {
 		return err
@@ -81,17 +86,15 @@ func (c *GmailDraftsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "ID\tMESSAGE_ID")
-	for _, d := range drafts {
-		msgID := ""
-		if d.Message != nil {
-			msgID = d.Message.Id
-		}
-		fmt.Fprintf(w, "%s\t%s\n", d.Id, msgID)
+	if err := outfmt.WriteTable(
+		ctx,
+		stdoutWriter(ctx),
+		compactGmailRows(drafts),
+		gmailDraftColumns(),
+	); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -118,58 +121,61 @@ func (c *GmailDraftsGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 	if draft.Message == nil {
 		if outfmt.IsJSON(ctx) {
-			return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"draft": draft})
+			return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"draft": draft})
 		}
 		u.Err().Println("Empty draft")
 		return nil
 	}
 
 	msg := draft.Message
+	attachments := collectAttachments(msg.Payload)
+	attachDir := ""
+	if c.Download && msg.Id != "" && len(attachments) > 0 {
+		layout, layoutErr := commandLayout(ctx, config.PathKindConfig)
+		if layoutErr != nil {
+			return layoutErr
+		}
+		attachDir = layout.GmailAttachmentsDir()
+	}
 	if outfmt.IsJSON(ctx) {
 		out := map[string]any{"draft": draft}
 		if c.Download {
-			attachDir, err := config.EnsureGmailAttachmentsDir()
-			if err != nil {
-				return err
-			}
-			downloads, err := downloadAttachmentOutputs(ctx, svc, msg.Id, collectAttachments(msg.Payload), attachDir)
-			if err != nil {
-				return err
+			var downloads []attachmentDownloadOutput
+			if attachDir != "" {
+				downloads, err = downloadAttachmentOutputs(ctx, svc, msg.Id, attachments, attachDir)
+				if err != nil {
+					return err
+				}
 			}
 			out["downloaded"] = attachmentDownloadDraftOutputs(downloads)
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, out)
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), out)
 	}
 
-	u.Out().Printf("Draft-ID: %s", draft.Id)
-	u.Out().Printf("Message-ID: %s", msg.Id)
-	u.Out().Printf("To: %s", headerValue(msg.Payload, "To"))
-	u.Out().Printf("Cc: %s", headerValue(msg.Payload, "Cc"))
-	u.Out().Printf("Bcc: %s", headerValue(msg.Payload, "Bcc"))
-	u.Out().Printf("Subject: %s", headerValue(msg.Payload, "Subject"))
+	u.Out().Linef("Draft-ID: %s", draft.Id)
+	u.Out().Linef("Message-ID: %s", msg.Id)
+	u.Out().Linef("To: %s", headerValue(msg.Payload, "To"))
+	u.Out().Linef("Cc: %s", headerValue(msg.Payload, "Cc"))
+	u.Out().Linef("Bcc: %s", headerValue(msg.Payload, "Bcc"))
+	u.Out().Linef("Subject: %s", headerValue(msg.Payload, "Subject"))
 	u.Out().Println("")
 
-	body := bestBodyText(msg.Payload)
+	body := gmailcontent.BestBodyText(msg.Payload)
 	if body != "" {
 		u.Out().Println(body)
 		u.Out().Println("")
 	}
 
-	attachments := collectAttachments(msg.Payload)
 	printAttachmentSection(u.Out(), attachments)
 
-	if c.Download && msg.Id != "" && len(attachments) > 0 {
-		attachDir, err := config.EnsureGmailAttachmentsDir()
-		if err != nil {
-			return err
-		}
+	if attachDir != "" {
 		downloads, err := downloadAttachmentOutputs(ctx, svc, msg.Id, attachments, attachDir)
 		if err != nil {
 			return err
 		}
 		for _, a := range downloads {
 			if a.Cached {
-				u.Out().Printf("Cached: %s", a.Path)
+				u.Out().Linef("Cached: %s", a.Path)
 			} else {
 				u.Out().Successf("Saved: %s", a.Path)
 			}
@@ -179,6 +185,9 @@ func (c *GmailDraftsGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	return nil
 }
 
+// GmailDraftsDeleteCmd permanently deletes a draft. The Gmail API's
+// users.drafts.delete is irreversible — drafts are not moved to Trash and have
+// no untrash path — so this cannot be undone.
 type GmailDraftsDeleteCmd struct {
 	DraftID string `arg:"" name:"draftId" help:"Draft ID"`
 }
@@ -190,7 +199,9 @@ func (c *GmailDraftsDeleteCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return usage("empty draftId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete gmail draft %s", draftID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.drafts.delete", map[string]any{
+		"draft_id": draftID,
+	}, fmt.Sprintf("permanently delete gmail draft %s (not recoverable; drafts are not moved to Trash)", draftID)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -225,7 +236,7 @@ func (c *GmailDraftsSendCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	_, svc, err := requireGmailService(ctx, flags)
+	_, svc, err := requireGmailSendService(ctx, flags)
 	if err != nil {
 		return err
 	}
@@ -234,17 +245,10 @@ func (c *GmailDraftsSendCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if err != nil {
 		return err
 	}
-	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
-			"messageId": msg.Id,
-			"threadId":  msg.ThreadId,
-		})
-	}
-	u.Out().Printf("message_id\t%s", msg.Id)
-	if msg.ThreadId != "" {
-		u.Out().Printf("thread_id\t%s", msg.ThreadId)
-	}
-	return nil
+	return writeGmailMessageResults(ctx, u, []gmailMessageResult{{
+		MessageID: msg.Id,
+		ThreadID:  msg.ThreadId,
+	}})
 }
 
 type GmailDraftsCreateCmd struct {
@@ -255,9 +259,12 @@ type GmailDraftsCreateCmd struct {
 	Body             string   `name:"body" help:"Body (plain text; required unless --body-html is set)"`
 	BodyFile         string   `name:"body-file" help:"Body file path (plain text; '-' for stdin)"`
 	BodyHTML         string   `name:"body-html" help:"Body (HTML; optional)"`
+	BodyHTMLFile     string   `name:"body-html-file" help:"HTML body file path ('-' for stdin)"`
 	ReplyToMessageID string   `name:"reply-to-message-id" help:"Reply to Gmail message ID (sets In-Reply-To/References and thread)"`
+	ThreadID         string   `name:"thread-id" help:"Reply within a Gmail thread (uses latest message for headers)"`
+	ReplyAll         bool     `name:"reply-all" help:"Auto-populate recipients from original message (requires --reply-to-message-id or --thread-id)"`
 	ReplyTo          string   `name:"reply-to" help:"Reply-To header address"`
-	Quote            bool     `name:"quote" help:"Include quoted original message in reply (requires --reply-to-message-id)"`
+	Quote            bool     `name:"quote" help:"Include quoted original message in reply (requires --reply-to-message-id or --thread-id)"`
 	Attach           []string `name:"attach" help:"Attachment file path (repeatable)"`
 	From             string   `name:"from" help:"Send from this email address (must be a verified send-as alias)"`
 }
@@ -271,82 +278,202 @@ type draftComposeInput struct {
 	BodyHTML         string
 	ReplyToMessageID string
 	ReplyToThreadID  string
+	ReplyAll         bool
 	ReplyTo          string
 	Quote            bool
 	Attach           []string
-	From             string
+	// PrebuiltAttachments carry already-resolved attachment bytes (e.g. existing
+	// draft attachments preserved across an update) alongside any --attach paths.
+	PrebuiltAttachments []mailmime.Attachment
+	From                string
 }
 
 func (c draftComposeInput) validate() error {
-	if strings.TrimSpace(c.Subject) == "" {
+	if c.ReplyAll &&
+		strings.TrimSpace(c.ReplyToMessageID) == "" &&
+		strings.TrimSpace(c.ReplyToThreadID) == "" {
+		return usage("--reply-all requires --reply-to-message-id or --thread-id")
+	}
+	if strings.TrimSpace(c.Subject) == "" &&
+		strings.TrimSpace(c.ReplyToMessageID) == "" &&
+		strings.TrimSpace(c.ReplyToThreadID) == "" {
 		return usage("required: --subject")
 	}
 	if strings.TrimSpace(c.Body) == "" && strings.TrimSpace(c.BodyHTML) == "" {
-		return usage("required: --body, --body-file, or --body-html")
+		return usage("required: --body, --body-file, --body-html, or --body-html-file")
 	}
 	return nil
 }
 
-func buildDraftMessage(ctx context.Context, svc *gmail.Service, account string, input draftComposeInput) (*gmail.Message, string, error) {
-	sendAsList, sendAsListErr := listSendAs(ctx, svc)
-	from, err := resolveComposeFrom(ctx, svc, account, input.From, sendAsList, sendAsListErr)
+func buildDraftMessage(ctx context.Context, svc *gmail.Service, account string, input draftComposeInput) (*gmail.Message, string, []mailmime.AttachmentMetadata, error) {
+	sendAs, sendAsErr := listSendAs(ctx, svc)
+	from, err := resolveComposeFrom(ctx, svc, account, input.From, sendAs, sendAsErr)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	info, body, htmlBody, err := prepareComposeReply(ctx, svc, input.ReplyToMessageID, input.ReplyToThreadID, input.Quote, input.Body, input.BodyHTML)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	inReplyTo := info.InReplyTo
-	references := info.References
 	threadID := info.ThreadID
 	atts := attachmentsFromPaths(input.Attach)
+	atts = append(atts, input.PrebuiltAttachments...)
+	atts = append(atts, info.InlineResources...)
+	atts, attachmentMetadata, err := mailmime.PrepareAttachments(atts, os.ReadFile)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	subject := input.Subject
+	if strings.TrimSpace(subject) == "" {
+		subject = autoReplySubject("", info.Subject)
+	}
 
-	raw, err := buildRFC822(mailOptions{
-		From:        from.header,
-		To:          splitCSV(input.To),
-		Cc:          splitCSV(input.Cc),
-		Bcc:         splitCSV(input.Bcc),
+	toRecipients := splitCSV(input.To)
+	ccRecipients := splitCSV(input.Cc)
+	bccRecipients := splitCSV(input.Bcc)
+	if input.ReplyAll {
+		recipients, recipientErr := buildReplyRecipients(
+			info,
+			selfEmailsForReply(account, from.sendingEmail, sendAs),
+			true,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+		if recipientErr != nil {
+			return nil, "", nil, recipientErr
+		}
+		toRecipients = formatMailboxes(recipients.To)
+		ccRecipients = formatMailboxes(recipients.Cc)
+		bccRecipients = formatMailboxes(recipients.Bcc)
+		if strings.TrimSpace(input.To) != "" {
+			toRecipients = splitCSV(input.To)
+		}
+		if strings.TrimSpace(input.Cc) != "" {
+			ccRecipients = splitCSV(input.Cc)
+		}
+		if strings.TrimSpace(input.Bcc) != "" {
+			bccRecipients = splitCSV(input.Bcc)
+		}
+	}
+
+	msg, err := buildGmailMessage(ctx, sendMessageOptions{
+		FromAddr:    from.header,
 		ReplyTo:     input.ReplyTo,
-		Subject:     input.Subject,
+		Subject:     subject,
 		Body:        body,
 		BodyHTML:    htmlBody,
-		InReplyTo:   inReplyTo,
-		References:  references,
+		ReplyInfo:   info,
 		Attachments: atts,
-	}, &rfc822Config{allowMissingTo: true})
+	}, sendBatch{
+		To:  toRecipients,
+		Cc:  ccRecipients,
+		Bcc: bccRecipients,
+	}, true)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
-	msg := &gmail.Message{
-		Raw: base64.RawURLEncoding.EncodeToString(raw),
-	}
-	if threadID != "" {
-		msg.ThreadId = threadID
-	}
-
-	return msg, threadID, nil
+	return msg, threadID, attachmentMetadata, nil
 }
 
-func writeDraftResult(ctx context.Context, u *ui.UI, draft *gmail.Draft, threadID string) error {
+// carryForwardDraftAttachments fetches the bytes of an existing draft message's
+// attachments so they can be re-attached to a rebuilt draft on update. Returns
+// nil when the draft has no attachments. Mirrors the gmail forward reattach path.
+func carryForwardDraftAttachments(ctx context.Context, svc *gmail.Service, messageID string, payload *gmail.MessagePart) ([]mailmime.Attachment, error) {
+	var out []mailmime.Attachment
+	var walk func(*gmail.MessagePart) error
+	walk = func(part *gmail.MessagePart) error {
+		if part == nil {
+			return nil
+		}
+		if part.Body != nil {
+			filename := strings.TrimSpace(part.Filename)
+			if filename == "" && part.Body.AttachmentId != "" {
+				filename = defaultAttachmentFilename
+			}
+			switch {
+			case part.Body.AttachmentId != "":
+				data, dlErr := fetchDraftAttachmentBytes(ctx, svc, messageID, part.Body.AttachmentId, part.Body.Size)
+				if dlErr != nil {
+					return fmt.Errorf("preserve attachment %q: %w", filename, dlErr)
+				}
+				out = append(out, mailmime.Attachment{
+					Filename: filename,
+					MIMEType: part.MimeType,
+					Data:     data,
+					DataSet:  true,
+				})
+			case filename != "" && (part.Body.Data != "" || part.Body.Size == 0):
+				var data []byte
+				if part.Body.Data != "" {
+					decoded, decErr := gmailcontent.DecodeBase64URLBytes(part.Body.Data)
+					if decErr != nil {
+						return fmt.Errorf("preserve attachment %q: %w", filename, decErr)
+					}
+					data = decoded
+				}
+				out = append(out, mailmime.Attachment{
+					Filename: filename,
+					MIMEType: part.MimeType,
+					Data:     data,
+					DataSet:  true,
+				})
+			}
+		}
+		for _, child := range part.Parts {
+			if err := walk(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(payload); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func fetchDraftAttachmentBytes(ctx context.Context, svc *gmail.Service, messageID, attachmentID string, expectedSize int64) ([]byte, error) {
+	body, err := svc.Users.Messages.Attachments.Get("me", messageID, attachmentID).Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, errors.New("empty attachment data")
+	}
+	if body.Data == "" {
+		if expectedSize == 0 {
+			return []byte{}, nil
+		}
+		return nil, errors.New("empty attachment data")
+	}
+	return gmailcontent.DecodeBase64URLBytes(body.Data)
+}
+
+func writeDraftResult(ctx context.Context, u *ui.UI, draft *gmail.Draft, threadID string, attachments []mailmime.AttachmentMetadata) error {
 	if threadID == "" && draft != nil && draft.Message != nil {
 		threadID = draft.Message.ThreadId
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		result := map[string]any{
 			"draftId":  draft.Id,
 			"message":  draft.Message,
 			"threadId": threadID,
-		})
+		}
+		if len(attachments) > 0 {
+			result["attachments"] = attachments
+		}
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), result)
 	}
-	u.Out().Printf("draft_id\t%s", draft.Id)
+	u.Out().Linef("draft_id\t%s", draft.Id)
 	if draft.Message != nil && draft.Message.Id != "" {
-		u.Out().Printf("message_id\t%s", draft.Message.Id)
+		u.Out().Linef("message_id\t%s", draft.Message.Id)
 	}
 	if threadID != "" {
-		u.Out().Printf("thread_id\t%s", threadID)
+		u.Out().Linef("thread_id\t%s", threadID)
 	}
 	return nil
 }
@@ -441,13 +568,17 @@ func messageFromMatchesAccount(msg *gmail.Message, account string) bool {
 func (c *GmailDraftsCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
 
-	body, err := resolveBodyInput(c.Body, c.BodyFile)
+	body, htmlBody, err := resolveComposeBodyInputs(ctx, c.Body, c.BodyFile, c.BodyHTML, c.BodyHTMLFile)
 	if err != nil {
 		return err
 	}
 	replyToMessageID := normalizeGmailMessageID(c.ReplyToMessageID)
-	if c.Quote && replyToMessageID == "" {
-		return usage("--quote requires --reply-to-message-id")
+	threadID := normalizeGmailThreadID(c.ThreadID)
+	if replyToMessageID != "" && threadID != "" {
+		return usage("use only one of --reply-to-message-id or --thread-id")
+	}
+	if c.Quote && replyToMessageID == "" && threadID == "" {
+		return usage("--quote requires --reply-to-message-id or --thread-id")
 	}
 
 	attachPaths, err := expandComposeAttachmentPaths(c.Attach)
@@ -461,9 +592,10 @@ func (c *GmailDraftsCreateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		Bcc:              c.Bcc,
 		Subject:          c.Subject,
 		Body:             body,
-		BodyHTML:         c.BodyHTML,
+		BodyHTML:         htmlBody,
 		ReplyToMessageID: replyToMessageID,
-		ReplyToThreadID:  "",
+		ReplyToThreadID:  threadID,
+		ReplyAll:         c.ReplyAll,
 		ReplyTo:          c.ReplyTo,
 		Quote:            c.Quote,
 		Attach:           attachPaths,
@@ -471,6 +603,9 @@ func (c *GmailDraftsCreateCmd) Run(ctx context.Context, flags *RootFlags) error 
 	}
 	if validateErr := input.validate(); validateErr != nil {
 		return validateErr
+	}
+	if headerErr := validateComposeHeaderInputs(input.To, input.Cc, input.Bcc, input.ReplyTo, input.Subject, input.From); headerErr != nil {
+		return headerErr
 	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "gmail.drafts.create", map[string]any{
@@ -481,6 +616,8 @@ func (c *GmailDraftsCreateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		"body_len":            len(strings.TrimSpace(input.Body)),
 		"body_html_len":       len(strings.TrimSpace(input.BodyHTML)),
 		"reply_to_message_id": strings.TrimSpace(input.ReplyToMessageID),
+		"thread_id":           strings.TrimSpace(input.ReplyToThreadID),
+		"reply_all":           input.ReplyAll,
 		"reply_to":            strings.TrimSpace(input.ReplyTo),
 		"quote":               input.Quote,
 		"from":                strings.TrimSpace(input.From),
@@ -494,7 +631,7 @@ func (c *GmailDraftsCreateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return err
 	}
 
-	msg, threadID, err := buildDraftMessage(ctx, svc, account, input)
+	msg, threadID, attachmentMetadata, err := buildDraftMessage(ctx, svc, account, input)
 	if err != nil {
 		return err
 	}
@@ -503,7 +640,7 @@ func (c *GmailDraftsCreateCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if err != nil {
 		return err
 	}
-	return writeDraftResult(ctx, u, draft, threadID)
+	return writeDraftResult(ctx, u, draft, threadID, attachmentMetadata)
 }
 
 type GmailDraftsUpdateCmd struct {
@@ -515,10 +652,14 @@ type GmailDraftsUpdateCmd struct {
 	Body             string   `name:"body" help:"Body (plain text; required unless --body-html is set)"`
 	BodyFile         string   `name:"body-file" help:"Body file path (plain text; '-' for stdin)"`
 	BodyHTML         string   `name:"body-html" help:"Body (HTML; optional)"`
+	BodyHTMLFile     string   `name:"body-html-file" help:"HTML body file path ('-' for stdin)"`
 	ReplyToMessageID string   `name:"reply-to-message-id" help:"Reply to Gmail message ID (sets In-Reply-To/References and thread)"`
+	ThreadID         string   `name:"thread-id" help:"Reply within a Gmail thread (uses latest message for headers); overrides the draft's existing thread"`
+	ReplyAll         bool     `name:"reply-all" help:"Auto-populate recipients from original message (requires --reply-to-message-id or --thread-id)"`
 	ReplyTo          string   `name:"reply-to" help:"Reply-To header address"`
 	Quote            bool     `name:"quote" help:"Include quoted original message in reply"`
-	Attach           []string `name:"attach" help:"Attachment file path (repeatable)"`
+	Attach           []string `name:"attach" help:"Attachment file path (repeatable). Replaces existing attachments; omit to preserve them, or use --clear-attachments to remove all."`
+	ClearAttachments bool     `name:"clear-attachments" help:"Remove all attachments from the draft. By default, omitting --attach preserves the draft's existing attachments."`
 	From             string   `name:"from" help:"Send from this email address (must be a verified send-as alias)"`
 }
 
@@ -536,16 +677,27 @@ func (c *GmailDraftsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		to = *c.To
 	}
 
-	body, err := resolveBodyInput(c.Body, c.BodyFile)
+	body, htmlBody, err := resolveComposeBodyInputs(ctx, c.Body, c.BodyFile, c.BodyHTML, c.BodyHTMLFile)
 	if err != nil {
 		return err
 	}
 	replyToMessageID := normalizeGmailMessageID(c.ReplyToMessageID)
+	threadID := normalizeGmailThreadID(c.ThreadID)
+	if replyToMessageID != "" && threadID != "" {
+		return usage("use only one of --reply-to-message-id or --thread-id")
+	}
 
 	attachPaths, err := expandComposeAttachmentPaths(c.Attach)
 	if err != nil {
 		return err
 	}
+	if c.ClearAttachments && len(attachPaths) > 0 {
+		return usage("use only one of --attach or --clear-attachments")
+	}
+	// gmail drafts update rebuilds the whole message, so without intervention an
+	// omitted --attach would silently drop the draft's existing attachments.
+	// Preserve them by default; --attach replaces, --clear-attachments removes.
+	preserveAttachments := len(attachPaths) == 0 && !c.ClearAttachments
 
 	input := draftComposeInput{
 		To:               to,
@@ -553,9 +705,10 @@ func (c *GmailDraftsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		Bcc:              c.Bcc,
 		Subject:          c.Subject,
 		Body:             body,
-		BodyHTML:         c.BodyHTML,
+		BodyHTML:         htmlBody,
 		ReplyToMessageID: replyToMessageID,
-		ReplyToThreadID:  "",
+		ReplyToThreadID:  threadID,
+		ReplyAll:         c.ReplyAll,
 		ReplyTo:          c.ReplyTo,
 		Quote:            c.Quote,
 		Attach:           attachPaths,
@@ -564,21 +717,28 @@ func (c *GmailDraftsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if validateErr := input.validate(); validateErr != nil {
 		return validateErr
 	}
+	if headerErr := validateComposeHeaderInputs(input.To, input.Cc, input.Bcc, input.ReplyTo, input.Subject, input.From); headerErr != nil {
+		return headerErr
+	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "gmail.drafts.update", map[string]any{
-		"draft_id":            draftID,
-		"to_keep_existing":    !toWasSet,
-		"to":                  splitCSV(input.To),
-		"cc":                  splitCSV(input.Cc),
-		"bcc":                 splitCSV(input.Bcc),
-		"subject":             strings.TrimSpace(input.Subject),
-		"body_len":            len(strings.TrimSpace(input.Body)),
-		"body_html_len":       len(strings.TrimSpace(input.BodyHTML)),
-		"reply_to_message_id": strings.TrimSpace(input.ReplyToMessageID),
-		"reply_to":            strings.TrimSpace(input.ReplyTo),
-		"quote":               input.Quote,
-		"from":                strings.TrimSpace(input.From),
-		"attachments":         attachPaths,
+		"draft_id":             draftID,
+		"to_keep_existing":     !toWasSet && !input.ReplyAll,
+		"to":                   splitCSV(input.To),
+		"cc":                   splitCSV(input.Cc),
+		"bcc":                  splitCSV(input.Bcc),
+		"subject":              strings.TrimSpace(input.Subject),
+		"body_len":             len(strings.TrimSpace(input.Body)),
+		"body_html_len":        len(strings.TrimSpace(input.BodyHTML)),
+		"reply_to_message_id":  strings.TrimSpace(input.ReplyToMessageID),
+		"reply_all":            input.ReplyAll,
+		"reply_to":             strings.TrimSpace(input.ReplyTo),
+		"quote":                input.Quote,
+		"from":                 strings.TrimSpace(input.From),
+		"attachments":          attachPaths,
+		"clear_attachments":    c.ClearAttachments,
+		"preserve_attachments": preserveAttachments,
+		"thread_id":            strings.TrimSpace(threadID),
 	}); dryRunErr != nil {
 		return dryRunErr
 	}
@@ -591,7 +751,8 @@ func (c *GmailDraftsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 	existingThreadID := ""
 	existingMessageID := ""
 	existingTo := ""
-	if !toWasSet || strings.TrimSpace(replyToMessageID) == "" {
+	var existingPayload *gmail.MessagePart
+	if (!toWasSet && !c.ReplyAll) || strings.TrimSpace(replyToMessageID) == "" || preserveAttachments {
 		existing, fetchErr := svc.Users.Drafts.Get("me", draftID).Format("full").Do()
 		if fetchErr != nil {
 			return fetchErr
@@ -599,35 +760,54 @@ func (c *GmailDraftsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 		if existing != nil && existing.Message != nil {
 			existingThreadID = strings.TrimSpace(existing.Message.ThreadId)
 			existingMessageID = strings.TrimSpace(existing.Message.Id)
-			if !toWasSet {
+			existingPayload = existing.Message.Payload
+			if !toWasSet && !c.ReplyAll {
 				existingTo = strings.TrimSpace(headerValue(existing.Message.Payload, "To"))
 			}
 		}
 	}
-	if !toWasSet {
+	if !toWasSet && !c.ReplyAll {
 		to = existingTo
+	}
+
+	// A caller-provided --thread-id targets that thread for reply headers,
+	// overriding the draft's own existing thread; otherwise fall back to the
+	// existing draft thread as before.
+	targetThreadID := existingThreadID
+	if threadID != "" {
+		targetThreadID = threadID
+	}
+
+	// Carry the existing draft's attachments forward unless the caller replaced
+	// (--attach) or explicitly cleared (--clear-attachments) them.
+	if preserveAttachments && existingMessageID != "" {
+		carried, attErr := carryForwardDraftAttachments(ctx, svc, existingMessageID, existingPayload)
+		if attErr != nil {
+			return attErr
+		}
+		input.PrebuiltAttachments = carried
 	}
 
 	replyToThreadID := ""
 	if c.Quote && strings.TrimSpace(replyToMessageID) == "" {
-		resolvedMessageID, resolveErr := resolveQuoteReplyTargetMessageID(ctx, svc, existingThreadID, account, existingMessageID)
+		resolvedMessageID, resolveErr := resolveQuoteReplyTargetMessageID(ctx, svc, targetThreadID, account, existingMessageID)
 		if resolveErr != nil {
 			return resolveErr
 		}
 		replyToMessageID = resolvedMessageID
 	}
 	if strings.TrimSpace(replyToMessageID) == "" {
-		replyToThreadID = existingThreadID
+		replyToThreadID = targetThreadID
 	}
 	if c.Quote && strings.TrimSpace(replyToMessageID) == "" && strings.TrimSpace(replyToThreadID) == "" {
-		return usage("--quote requires --reply-to-message-id or existing draft thread")
+		return usage("--quote requires --reply-to-message-id or --thread-id or existing draft thread")
 	}
 
 	input.To = to
 	input.ReplyToMessageID = replyToMessageID
 	input.ReplyToThreadID = replyToThreadID
 
-	msg, threadID, err := buildDraftMessage(ctx, svc, account, input)
+	msg, threadID, attachmentMetadata, err := buildDraftMessage(ctx, svc, account, input)
 	if err != nil {
 		return err
 	}
@@ -636,5 +816,5 @@ func (c *GmailDraftsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if err != nil {
 		return err
 	}
-	return writeDraftResult(ctx, u, draft, threadID)
+	return writeDraftResult(ctx, u, draft, threadID, attachmentMetadata)
 }

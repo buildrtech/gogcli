@@ -8,17 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"google.golang.org/api/option"
-	"google.golang.org/api/sheets/v4"
-
-	"github.com/steipete/gogcli/internal/ui"
 )
 
 func TestSheetsFreezeCmd(t *testing.T) {
-	origNew := newSheetsService
-	t.Cleanup(func() { newSheetsService = origNew })
-
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/sheets/v4"), "/v4")
@@ -42,22 +34,10 @@ func TestSheetsFreezeCmd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := sheets.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newSheetsService = func(context.Context, string) (*sheets.Service, error) { return svc, nil }
+	svc := newSheetsServiceFromServer(t, srv)
 
 	flags := &RootFlags{Account: "a@b.com"}
-	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
-	if uiErr != nil {
-		t.Fatalf("ui.New: %v", uiErr)
-	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withSheetsTestService(newCmdRuntimeOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &SheetsFreezeCmd{}
 	if err := runKong(t, cmd, []string{"s1", "--rows", "0", "--cols", "2"}, ctx, flags); err != nil {
@@ -79,5 +59,31 @@ func TestSheetsFreezeCmd(t *testing.T) {
 	}
 	if v, ok := gridProps["frozenColumnCount"]; !ok || v != float64(2) {
 		t.Fatalf("expected frozenColumnCount=2, got %#v", gridProps)
+	}
+}
+
+func TestSheetsFreezeCmdRejectsNegativeProvidedCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "rows",
+			args: []string{"s1", "--rows=-1"},
+			want: "--rows must be >= 0",
+		},
+		{
+			name: "cols",
+			args: []string{"s1", "--cols=-1"},
+			want: "--cols must be >= 0",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runKong(t, &SheetsFreezeCmd{}, tc.args, context.Background(), &RootFlags{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
 	}
 }

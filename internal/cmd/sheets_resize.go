@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"google.golang.org/api/sheets/v4"
+
+	"github.com/steipete/gogcli/internal/sheetsdimension"
 )
 
 type SheetsResizeColumnsCmd struct {
@@ -31,9 +33,9 @@ func (c *SheetsResizeColumnsCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return usage("--width must be > 0 when --auto is not set")
 	}
 
-	span, err := parseColumnsSpan(columnsSpec, "columns")
+	span, err := sheetsdimension.ParseColumns(columnsSpec, "columns")
 	if err != nil {
-		return err
+		return newUsageError(err)
 	}
 
 	return runSheetsMutation(ctx, flags, "sheets.resize-columns", map[string]any{
@@ -112,9 +114,9 @@ func (c *SheetsResizeRowsCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("--height must be > 0 when --auto is not set")
 	}
 
-	span, err := parseRowsSpan(rowsSpec, "rows")
+	span, err := sheetsdimension.ParseRows(rowsSpec, "rows")
 	if err != nil {
-		return err
+		return newUsageError(err)
 	}
 
 	return runSheetsMutation(ctx, flags, "sheets.resize-rows", map[string]any{

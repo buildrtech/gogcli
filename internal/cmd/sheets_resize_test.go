@@ -8,17 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"google.golang.org/api/option"
-	"google.golang.org/api/sheets/v4"
-
-	"github.com/steipete/gogcli/internal/ui"
 )
 
 func TestSheetsResizeCmds(t *testing.T) {
-	origNew := newSheetsService
-	t.Cleanup(func() { newSheetsService = origNew })
-
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/sheets/v4"), "/v4")
@@ -42,22 +34,10 @@ func TestSheetsResizeCmds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := sheets.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newSheetsService = func(context.Context, string) (*sheets.Service, error) { return svc, nil }
+	svc := newSheetsServiceFromServer(t, srv)
 
 	flags := &RootFlags{Account: "a@b.com"}
-	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
-	if uiErr != nil {
-		t.Fatalf("ui.New: %v", uiErr)
-	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withSheetsTestService(newCmdRuntimeOutputContext(t, io.Discard, io.Discard), svc)
 
 	t.Run("resize columns force-sends zero sheet and start index", func(t *testing.T) {
 		gotBody = nil
@@ -100,44 +80,32 @@ func TestSheetsResizeCmds(t *testing.T) {
 	})
 }
 
-func TestParseColumnsSpan(t *testing.T) {
-	t.Run("sheet range", func(t *testing.T) {
-		span, err := parseColumnsSpan("Sheet 1!$C:$A", "columns")
-		if err != nil {
-			t.Fatalf("parseColumnsSpan: %v", err)
-		}
-		if span.SheetName != "Sheet 1" {
-			t.Fatalf("SheetName=%q, want %q", span.SheetName, "Sheet 1")
-		}
-		if span.StartIndex != 0 || span.EndIndex != 3 {
-			t.Fatalf("range=%d:%d, want 0:3", span.StartIndex, span.EndIndex)
-		}
-	})
-
-	t.Run("invalid range", func(t *testing.T) {
-		if _, err := parseColumnsSpan("Sheet1!1:3", "columns"); err == nil {
-			t.Fatal("expected error for invalid column range")
-		}
-	})
-}
-
-func TestParseRowsSpan(t *testing.T) {
-	t.Run("sheet range", func(t *testing.T) {
-		span, err := parseRowsSpan("Sheet 1!$4:$2", "rows")
-		if err != nil {
-			t.Fatalf("parseRowsSpan: %v", err)
-		}
-		if span.SheetName != "Sheet 1" {
-			t.Fatalf("SheetName=%q, want %q", span.SheetName, "Sheet 1")
-		}
-		if span.StartIndex != 1 || span.EndIndex != 4 {
-			t.Fatalf("range=%d:%d, want 1:4", span.StartIndex, span.EndIndex)
-		}
-	})
-
-	t.Run("invalid row", func(t *testing.T) {
-		if _, err := parseRowsSpan("Sheet1!0:2", "rows"); err == nil {
-			t.Fatal("expected error for invalid row range")
-		}
-	})
+func TestSheetsResizeCmds_InvalidRangesAreUsageErrors(t *testing.T) {
+	flags := &RootFlags{Account: "a@b.com"}
+	for _, tc := range []struct {
+		name string
+		cmd  any
+		args []string
+	}{
+		{
+			name: "columns",
+			cmd:  &SheetsResizeColumnsCmd{},
+			args: []string{"s1", "1:3", "--width", "120"},
+		},
+		{
+			name: "rows",
+			cmd:  &SheetsResizeRowsCmd{},
+			args: []string{"s1", "A:C", "--height", "24"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runKong(t, tc.cmd, tc.args, context.Background(), flags)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if got := ExitCode(err); got != 2 {
+				t.Fatalf("ExitCode = %d, want 2 (err=%v)", got, err)
+			}
+		})
+	}
 }

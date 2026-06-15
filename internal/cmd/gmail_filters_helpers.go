@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -38,8 +37,9 @@ var sleepBeforeGmailFilterRetry = func(ctx context.Context, d time.Duration) err
 }
 
 func writeGmailFiltersList(ctx context.Context, filters []*gmail.Filter) error {
+	filters = normalizeGmailFilters(filters)
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"filters": filters})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"filters": filters})
 	}
 
 	u := ui.FromContext(ctx)
@@ -48,7 +48,7 @@ func writeGmailFiltersList(ctx context.Context, filters []*gmail.Filter) error {
 		return nil
 	}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	tw := tabwriter.NewWriter(stdoutWriter(ctx), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tFROM\tTO\tSUBJECT\tQUERY")
 	for _, f := range filters {
 		criteria := f.Criteria
@@ -72,9 +72,16 @@ func writeGmailFiltersList(ctx context.Context, filters []*gmail.Filter) error {
 	return tw.Flush()
 }
 
+func normalizeGmailFilters(filters []*gmail.Filter) []*gmail.Filter {
+	if filters == nil {
+		return []*gmail.Filter{}
+	}
+	return filters
+}
+
 func writeGmailFilter(ctx context.Context, filter *gmail.Filter) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"filter": filter})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"filter": filter})
 	}
 	printGmailFilterDetails(ui.FromContext(ctx), filter, true)
 	return nil
@@ -82,7 +89,7 @@ func writeGmailFilter(ctx context.Context, filter *gmail.Filter) error {
 
 func writeCreatedGmailFilter(ctx context.Context, filter *gmail.Filter) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"filter": filter})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"filter": filter})
 	}
 
 	u := ui.FromContext(ctx)
@@ -92,35 +99,35 @@ func writeCreatedGmailFilter(ctx context.Context, filter *gmail.Filter) error {
 }
 
 func printGmailFilterDetails(u *ui.UI, filter *gmail.Filter, includeActions bool) {
-	u.Out().Printf("id\t%s", filter.Id)
+	u.Out().Linef("id\t%s", filter.Id)
 	if filter.Criteria != nil {
 		c := filter.Criteria
 		if c.From != "" {
-			u.Out().Printf("from\t%s", c.From)
+			u.Out().Linef("from\t%s", c.From)
 		}
 		if c.To != "" {
-			u.Out().Printf("to\t%s", c.To)
+			u.Out().Linef("to\t%s", c.To)
 		}
 		if c.Subject != "" {
-			u.Out().Printf("subject\t%s", c.Subject)
+			u.Out().Linef("subject\t%s", c.Subject)
 		}
 		if c.Query != "" {
-			u.Out().Printf("query\t%s", c.Query)
+			u.Out().Linef("query\t%s", c.Query)
 		}
 		if c.HasAttachment {
-			u.Out().Printf("has_attachment\ttrue")
+			u.Out().Linef("has_attachment\ttrue")
 		}
 		if c.NegatedQuery != "" {
-			u.Out().Printf("negated_query\t%s", c.NegatedQuery)
+			u.Out().Linef("negated_query\t%s", c.NegatedQuery)
 		}
 		if c.Size != 0 {
-			u.Out().Printf("size\t%d", c.Size)
+			u.Out().Linef("size\t%d", c.Size)
 		}
 		if c.SizeComparison != "" {
-			u.Out().Printf("size_comparison\t%s", c.SizeComparison)
+			u.Out().Linef("size_comparison\t%s", c.SizeComparison)
 		}
 		if c.ExcludeChats {
-			u.Out().Printf("exclude_chats\ttrue")
+			u.Out().Linef("exclude_chats\ttrue")
 		}
 	}
 	if !includeActions || filter.Action == nil {
@@ -129,13 +136,13 @@ func printGmailFilterDetails(u *ui.UI, filter *gmail.Filter, includeActions bool
 
 	a := filter.Action
 	if len(a.AddLabelIds) > 0 {
-		u.Out().Printf("add_label_ids\t%s", strings.Join(a.AddLabelIds, ","))
+		u.Out().Linef("add_label_ids\t%s", strings.Join(a.AddLabelIds, ","))
 	}
 	if len(a.RemoveLabelIds) > 0 {
-		u.Out().Printf("remove_label_ids\t%s", strings.Join(a.RemoveLabelIds, ","))
+		u.Out().Linef("remove_label_ids\t%s", strings.Join(a.RemoveLabelIds, ","))
 	}
 	if a.Forward != "" {
-		u.Out().Printf("forward\t%s", a.Forward)
+		u.Out().Linef("forward\t%s", a.Forward)
 	}
 }
 
@@ -146,6 +153,11 @@ func (c *GmailFiltersCreateCmd) validate() (string, error) {
 	}
 	if c.AddLabel == "" && c.RemoveLabel == "" && !c.Archive && !c.MarkRead && !c.Star && forwardTarget == "" && !c.Trash && !c.NeverSpam && !c.Important {
 		return "", errors.New("must specify at least one action flag (--add-label, --remove-label, --archive, --mark-read, --star, --forward, --trash, --never-spam, or --important)")
+	}
+	if forwardTarget != "" {
+		if err := validateGmailSettingsEmail("--forward", forwardTarget); err != nil {
+			return "", err
+		}
 	}
 	return forwardTarget, nil
 }

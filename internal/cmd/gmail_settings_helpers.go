@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"google.golang.org/api/gmail/v1"
 
@@ -26,7 +24,7 @@ func loadGmailSettingsService(ctx context.Context, flags *RootFlags) (*gmail.Ser
 
 func writeGmailEmailStatusList(ctx context.Context, jsonKey string, raw any, emptyMessage string, rows []gmailEmailStatusRow) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{jsonKey: raw})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{jsonKey: raw})
 	}
 
 	u := ui.FromContext(ctx)
@@ -35,35 +33,29 @@ func writeGmailEmailStatusList(ctx context.Context, jsonKey string, raw any, emp
 		return nil
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "EMAIL\tSTATUS")
-	for _, row := range rows {
-		fmt.Fprintf(w, "%s\t%s\n", sanitizeTab(row.Email), sanitizeTab(row.Status))
-	}
-	return nil
+	return outfmt.WriteTable(ctx, stdoutWriter(ctx), rows, gmailEmailStatusColumns())
 }
 
 func writeGmailEmailStatusItem(ctx context.Context, jsonKey string, raw any, emailKey string, row gmailEmailStatusRow) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{jsonKey: raw})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{jsonKey: raw})
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("%s\t%s", emailKey, row.Email)
-	u.Out().Printf("verification_status\t%s", row.Status)
+	u.Out().Linef("%s\t%s", emailKey, row.Email)
+	u.Out().Linef("verification_status\t%s", row.Status)
 	return nil
 }
 
 func writeGmailEmailStatusCreateResult(ctx context.Context, jsonKey string, raw any, emailKey string, row gmailEmailStatusRow, successMessage string, notes ...string) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{jsonKey: raw})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{jsonKey: raw})
 	}
 
 	u := ui.FromContext(ctx)
 	u.Out().Println(successMessage)
-	u.Out().Printf("%s\t%s", emailKey, row.Email)
-	u.Out().Printf("verification_status\t%s", row.Status)
+	u.Out().Linef("%s\t%s", emailKey, row.Email)
+	u.Out().Linef("verification_status\t%s", row.Status)
 	for _, note := range notes {
 		if note == "" {
 			continue
@@ -71,4 +63,11 @@ func writeGmailEmailStatusCreateResult(ctx context.Context, jsonKey string, raw 
 		u.Out().Println(note)
 	}
 	return nil
+}
+
+func normalizeGmailSettingsItems[T any](items []*T) []*T {
+	if items == nil {
+		return []*T{}
+	}
+	return items
 }

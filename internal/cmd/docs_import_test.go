@@ -19,6 +19,33 @@ func testImages(count int) []markdownImage {
 // extractMarkdownImages
 // ---------------------------------------------------------------------------
 
+func TestPrepareMarkdownExtractsImagesOnce(t *testing.T) {
+	origToken := imgPlaceholderToken
+	t.Cleanup(func() { imgPlaceholderToken = origToken })
+
+	calls := 0
+	imgPlaceholderToken = func() string {
+		calls++
+
+		return "prepared"
+	}
+
+	source := "before ![alt](https://example.com/image.png) after"
+	got := prepareMarkdown(source)
+	if calls != 1 {
+		t.Fatalf("placeholder token calls = %d, want 1", calls)
+	}
+	if got.source != source {
+		t.Fatalf("source = %q, want %q", got.source, source)
+	}
+	if got.cleaned != "before <<IMG_prepared_0>> after" {
+		t.Fatalf("cleaned = %q", got.cleaned)
+	}
+	if len(got.images) != 1 || got.images[0].placeholder() != "<<IMG_prepared_0>>" {
+		t.Fatalf("images = %#v", got.images)
+	}
+}
+
 func TestExtractMarkdownImages_NoImages(t *testing.T) {
 	origToken := imgPlaceholderToken
 	t.Cleanup(func() { imgPlaceholderToken = origToken })
@@ -262,6 +289,20 @@ func TestMarkdownImage_Placeholder(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("index %d: placeholder() = %q, want %q", tc.index, got, tc.want)
 		}
+	}
+}
+
+func TestSubtractMarkdownImagePlaceholderDrift(t *testing.T) {
+	images := []markdownImage{
+		{token: "test", index: 0},
+		{token: "test", index: 1},
+	}
+	placeholderDrift := (utf16Len("<<IMG_test_0>>") - 1) + (utf16Len("<<IMG_test_1>>") - 1)
+	if got, want := subtractMarkdownImagePlaceholderDrift(40, 1, images), int64(40)-placeholderDrift; got != want {
+		t.Fatalf("subtractMarkdownImagePlaceholderDrift() = %d, want %d", got, want)
+	}
+	if got := subtractMarkdownImagePlaceholderDrift(5, 4, images); got != 4 {
+		t.Fatalf("subtractMarkdownImagePlaceholderDrift() floor = %d, want 4", got)
 	}
 }
 
@@ -547,7 +588,7 @@ func TestFindPlaceholderIndices_SkipsNilTextRun(t *testing.T) {
 
 func TestBuildImageInsertRequests_EmptyInputs(t *testing.T) {
 	// All empty
-	reqs := buildImageInsertRequests(nil, nil, nil)
+	reqs := buildImageInsertRequests(nil, nil, nil, "")
 	if len(reqs) != 0 {
 		t.Fatalf("expected 0 requests for nil inputs, got %d", len(reqs))
 	}
@@ -557,6 +598,7 @@ func TestBuildImageInsertRequests_EmptyInputs(t *testing.T) {
 		make(map[string]docRange),
 		[]markdownImage{},
 		make(map[int]string),
+		"",
 	)
 	if len(reqs) != 0 {
 		t.Fatalf("expected 0 requests for empty inputs, got %d", len(reqs))
@@ -572,7 +614,7 @@ func TestBuildImageInsertRequests_SingleImage(t *testing.T) {
 		0: "https://example.com/img.png",
 	}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests (delete + insert), got %d", len(reqs))
 	}
@@ -619,7 +661,7 @@ func TestBuildImageInsertRequests_MultipleImages_ReverseOrder(t *testing.T) {
 		2: "https://example.com/c.png",
 	}
 
-	reqs := buildImageInsertRequests(placeholders, images, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, images, imageURLs, "")
 	// 3 images * 2 requests each = 6
 	if len(reqs) != 6 {
 		t.Fatalf("expected 6 requests, got %d", len(reqs))
@@ -657,7 +699,7 @@ func TestBuildImageInsertRequests_MissingPlaceholder(t *testing.T) {
 		0: "https://example.com/img.png",
 	}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 0 {
 		t.Fatalf("expected 0 requests when placeholder missing, got %d", len(reqs))
 	}
@@ -671,7 +713,7 @@ func TestBuildImageInsertRequests_MissingURL(t *testing.T) {
 	}
 	imageURLs := map[int]string{} // empty — URL not resolved
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 0 {
 		t.Fatalf("expected 0 requests when URL missing, got %d", len(reqs))
 	}
@@ -692,7 +734,7 @@ func TestBuildImageInsertRequests_PartialMissing(t *testing.T) {
 		// 1 is intentionally missing
 	}
 
-	reqs := buildImageInsertRequests(placeholders, images, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, images, imageURLs, "")
 	// Only 1 image produces requests (2 = delete + insert)
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
@@ -711,7 +753,7 @@ func TestBuildImageInsertRequests_DeleteRangeMatchesPlaceholder(t *testing.T) {
 	}
 	imageURLs := map[int]string{0: "https://x.com/a.png"}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}
@@ -729,7 +771,7 @@ func TestBuildImageInsertRequests_InsertLocationMatchesStart(t *testing.T) {
 	}
 	imageURLs := map[int]string{0: "https://x.com/a.png"}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}
@@ -793,7 +835,7 @@ func TestExtractAndFindPlaceholders_RoundTrip(t *testing.T) {
 		0: "https://example.com/a.png",
 		1: "https://example.com/b.jpg",
 	}
-	reqs := buildImageInsertRequests(placeholders, images, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, images, imageURLs, "")
 	if len(reqs) != 4 {
 		t.Fatalf("expected 4 requests, got %d", len(reqs))
 	}
@@ -1118,7 +1160,7 @@ func TestBuildImageInsertRequests_CustomWidth(t *testing.T) {
 	}
 	imageURLs := map[int]string{0: "https://x.com/a.png"}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}
@@ -1138,7 +1180,7 @@ func TestBuildImageInsertRequests_CustomBothDimensions(t *testing.T) {
 	}
 	imageURLs := map[int]string{0: "https://x.com/a.png"}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}
@@ -1158,7 +1200,7 @@ func TestBuildImageInsertRequests_CustomHeightOnly(t *testing.T) {
 	}
 	imageURLs := map[int]string{0: "https://x.com/a.png"}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}
@@ -1178,7 +1220,7 @@ func TestBuildImageInsertRequests_DefaultWidth(t *testing.T) {
 	}
 	imageURLs := map[int]string{0: "https://x.com/a.png"}
 
-	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs)
+	reqs := buildImageInsertRequests(placeholders, []markdownImage{img}, imageURLs, "")
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(reqs))
 	}

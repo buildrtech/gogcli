@@ -2,22 +2,30 @@ package cmd
 
 import (
 	"context"
-	"io"
-	"os"
 
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
 )
 
 func fetchClassroomPagedList[T any](all bool, page string, fetch func(string) ([]*T, string, error)) ([]*T, string, error) {
-	if all {
-		items, err := collectAllPages(page, fetch)
-		if err != nil {
-			return nil, "", err
-		}
-		return items, "", nil
+	return loadPagedItems(page, all, fetch)
+}
+
+func nonNilClassroomItems[T any](items []*T) []*T {
+	if items == nil {
+		return []*T{}
 	}
-	return fetch(page)
+	return items
+}
+
+func compactClassroomRows[T any](items []*T) []*T {
+	rows := make([]*T, 0, len(items))
+	for _, item := range items {
+		if item != nil {
+			rows = append(rows, item)
+		}
+	}
+	return rows
 }
 
 func writeClassroomPagedList[T any](
@@ -28,10 +36,11 @@ func writeClassroomPagedList[T any](
 	emptyMessage string,
 	failEmpty bool,
 	hintOnEmpty bool,
-	printTable func(io.Writer),
+	columns []outfmt.Column[*T],
 ) error {
+	items = nonNilClassroomItems(items)
 	if outfmt.IsJSON(ctx) {
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			jsonKey:         items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -47,14 +56,14 @@ func writeClassroomPagedList[T any](
 	if len(items) == 0 {
 		u.Err().Println(emptyMessage)
 		if hintOnEmpty {
-			printNextPageHint(u, nextPageToken)
+			printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 		}
 		return failEmptyExit(failEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	printTable(w)
-	printNextPageHint(u, nextPageToken)
+	if err := outfmt.WriteTable(ctx, stdoutWriter(ctx), compactClassroomRows(items), columns); err != nil {
+		return err
+	}
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }

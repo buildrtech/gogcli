@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"os"
 	"strings"
 
 	formsapi "google.golang.org/api/forms/v1"
@@ -27,10 +26,6 @@ type FormsWatchCreateCmd struct {
 }
 
 func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -38,6 +33,9 @@ func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	topicID := strings.TrimSpace(c.TopicID)
 	if topicID == "" {
 		return usage("empty --topic")
+	}
+	if err := validateFormsWatchTopicName(topicID); err != nil {
+		return err
 	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "forms.watches.create", map[string]any{
@@ -48,7 +46,12 @@ func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return dryRunErr
 	}
 
-	svc, err := newFormsService(ctx, account)
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := formsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -70,7 +73,7 @@ func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"created": true,
 			"form_id": formID,
 			"watch":   watch,
@@ -78,13 +81,21 @@ func (c *FormsWatchCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("created\ttrue")
-	u.Out().Printf("watch_id\t%s", watch.Id)
-	u.Out().Printf("form_id\t%s", formID)
-	u.Out().Printf("event_type\t%s", watch.EventType)
-	u.Out().Printf("state\t%s", watch.State)
+	u.Out().Linef("created\ttrue")
+	u.Out().Linef("watch_id\t%s", watch.Id)
+	u.Out().Linef("form_id\t%s", formID)
+	u.Out().Linef("event_type\t%s", watch.EventType)
+	u.Out().Linef("state\t%s", watch.State)
 	if watch.ExpireTime != "" {
-		u.Out().Printf("expires\t%s", watch.ExpireTime)
+		u.Out().Linef("expires\t%s", watch.ExpireTime)
+	}
+	return nil
+}
+
+func validateFormsWatchTopicName(topicID string) error {
+	parts := strings.Split(strings.TrimSpace(topicID), "/")
+	if len(parts) != 4 || parts[0] != "projects" || strings.TrimSpace(parts[1]) == "" || parts[2] != "topics" || strings.TrimSpace(parts[3]) == "" {
+		return usage("--topic must be in projects/{project}/topics/{topic} format")
 	}
 	return nil
 }
@@ -104,7 +115,7 @@ func (c *FormsWatchListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty formId")
 	}
 
-	svc, err := newFormsService(ctx, account)
+	svc, err := formsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -115,9 +126,13 @@ func (c *FormsWatchListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		watches := resp.Watches
+		if watches == nil {
+			watches = []*formsapi.Watch{}
+		}
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"form_id": formID,
-			"watches": resp.Watches,
+			"watches": watches,
 		})
 	}
 
@@ -131,7 +146,7 @@ func (c *FormsWatchListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		if w == nil {
 			continue
 		}
-		u.Out().Printf("%s\t%s\t%s\t%s", w.Id, w.EventType, w.State, w.ExpireTime)
+		u.Out().Linef("%s\t%s\t%s\t%s", w.Id, w.EventType, w.State, w.ExpireTime)
 	}
 	return nil
 }
@@ -143,10 +158,6 @@ type FormsWatchDeleteCmd struct {
 }
 
 func (c *FormsWatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -163,7 +174,12 @@ func (c *FormsWatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return dryRunErr
 	}
 
-	svc, err := newFormsService(ctx, account)
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := formsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -173,7 +189,7 @@ func (c *FormsWatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"deleted":  true,
 			"form_id":  formID,
 			"watch_id": watchID,
@@ -181,9 +197,9 @@ func (c *FormsWatchDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("deleted\ttrue")
-	u.Out().Printf("form_id\t%s", formID)
-	u.Out().Printf("watch_id\t%s", watchID)
+	u.Out().Linef("deleted\ttrue")
+	u.Out().Linef("form_id\t%s", formID)
+	u.Out().Linef("watch_id\t%s", watchID)
 	return nil
 }
 
@@ -194,10 +210,6 @@ type FormsWatchRenewCmd struct {
 }
 
 func (c *FormsWatchRenewCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	formID := strings.TrimSpace(normalizeGoogleID(c.FormID))
 	if formID == "" {
 		return usage("empty formId")
@@ -214,7 +226,12 @@ func (c *FormsWatchRenewCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return dryRunErr
 	}
 
-	svc, err := newFormsService(ctx, account)
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := formsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -225,7 +242,7 @@ func (c *FormsWatchRenewCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"renewed": true,
 			"form_id": formID,
 			"watch":   watch,
@@ -233,9 +250,9 @@ func (c *FormsWatchRenewCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("renewed\ttrue")
-	u.Out().Printf("watch_id\t%s", watch.Id)
-	u.Out().Printf("form_id\t%s", formID)
-	u.Out().Printf("expires\t%s", watch.ExpireTime)
+	u.Out().Linef("renewed\ttrue")
+	u.Out().Linef("watch_id\t%s", watch.Id)
+	u.Out().Linef("form_id\t%s", formID)
+	u.Out().Linef("expires\t%s", watch.ExpireTime)
 	return nil
 }

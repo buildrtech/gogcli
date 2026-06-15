@@ -3,7 +3,7 @@ SHELL := /bin/bash
 # `make` should build the binary by default.
 .DEFAULT_GOAL := build
 
-.PHONY: build gog gogcli gog-help gogcli-help help fmt fmt-check lint test ci tools
+.PHONY: build build-safe gog gogcli gog-help gogcli-help help fmt fmt-check lint deadcode test ci tools pnpm-gate docs-commands docs-site docs-check
 .PHONY: worker-ci
 
 BIN_DIR := $(CURDIR)/bin
@@ -23,8 +23,9 @@ TOOLS_DIR := $(CURDIR)/.tools
 GOFUMPT := $(TOOLS_DIR)/gofumpt
 GOIMPORTS := $(TOOLS_DIR)/goimports
 GOLANGCI_LINT := $(TOOLS_DIR)/golangci-lint
+DEADCODE := $(TOOLS_DIR)/deadcode
 TOOLS_STAMP := $(TOOLS_DIR)/.versions
-TOOLS_VERSION := gofumpt=v0.9.2;goimports=v0.42.0;golangci-lint=v2.10.1
+TOOLS_VERSION := gofumpt=v0.9.2;goimports=v0.44.0;golangci-lint=v2.11.4;deadcode=v0.45.0
 
 # Allow passing CLI args as extra "targets":
 #   make gogcli -- --help
@@ -37,6 +38,9 @@ endif
 build:
 	@mkdir -p $(BIN_DIR)
 	@go build -ldflags "$(LDFLAGS)" -o $(BIN) $(CMD)
+
+build-safe:
+	@./build-safe.sh $${PROFILE:-safety-profiles/agent-safe.yaml} -o $${OUTPUT:-$(BIN_DIR)/gog-safe}
 
 gog: build
 	@if [ -n "$(RUN_ARGS)" ]; then \
@@ -64,14 +68,26 @@ gogcli-help: build
 
 help: gog-help
 
+docs-commands: build
+	@scripts/gen-command-reference.sh docs/commands.generated.md
+
+docs-site: docs-commands
+	@node scripts/build-docs-site.mjs
+
+docs-check: docs-site
+	@node --test scripts/check-docs-coverage.test.mjs
+	@node scripts/check-docs-coverage.mjs
+
 tools:
 	@mkdir -p $(TOOLS_DIR)
-	@if [ -x "$(GOFUMPT)" ] && [ -x "$(GOIMPORTS)" ] && [ -x "$(GOLANGCI_LINT)" ] && [ "$$(cat $(TOOLS_STAMP) 2>/dev/null)" = "$(TOOLS_VERSION)" ]; then \
+	@if [ -x "$(GOFUMPT)" ] && [ -x "$(GOIMPORTS)" ] && [ -x "$(GOLANGCI_LINT)" ] && [ -x "$(DEADCODE)" ] && [ "$$(cat $(TOOLS_STAMP) 2>/dev/null)" = "$(TOOLS_VERSION)" ]; then \
 		echo "tools up to date"; \
 	else \
+		set -e; \
 		GOBIN=$(TOOLS_DIR) go install mvdan.cc/gofumpt@v0.9.2; \
-		GOBIN=$(TOOLS_DIR) go install golang.org/x/tools/cmd/goimports@v0.42.0; \
-		GOBIN=$(TOOLS_DIR) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1; \
+		GOBIN=$(TOOLS_DIR) go install golang.org/x/tools/cmd/goimports@v0.44.0; \
+		GOBIN=$(TOOLS_DIR) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4; \
+		GOBIN=$(TOOLS_DIR) go install golang.org/x/tools/cmd/deadcode@v0.45.0; \
 		printf '%s\n' "$(TOOLS_VERSION)" > "$(TOOLS_STAMP)"; \
 	fi
 
@@ -80,12 +96,32 @@ fmt: tools
 	@$(GOFUMPT) -w .
 
 fmt-check: tools
-	@$(GOIMPORTS) -local github.com/steipete/gogcli -w .
-	@$(GOFUMPT) -w .
-	@git diff --exit-code -- '*.go' go.mod go.sum
+	@set -e; \
+	tmp="$$(mktemp)"; \
+	trap 'rm -f "$$tmp"' EXIT; \
+	$(GOIMPORTS) -local github.com/steipete/gogcli -l . > "$$tmp"; \
+	$(GOFUMPT) -l . >> "$$tmp"; \
+	unformatted="$$(sort -u "$$tmp")"; \
+	if [ -n "$$unformatted" ]; then \
+		printf 'formatting needed:\n%s\n' "$$unformatted"; \
+		exit 1; \
+	fi
 
 lint: tools
 	@$(GOLANGCI_LINT) run
+
+deadcode: tools
+	@set -e; \
+	output_file="$$(mktemp)"; \
+	trap 'rm -f "$$output_file"' EXIT; \
+	$(DEADCODE) -test ./... > "$$output_file"; \
+	if [ "$$(go env GOOS)" != "linux" ]; then \
+		GOOS=linux GOARCH=amd64 $(DEADCODE) -test ./... >> "$$output_file"; \
+	fi; \
+	if [ -s "$$output_file" ]; then \
+		cat "$$output_file"; \
+		exit 1; \
+	fi
 
 pnpm-gate:
 	@if [ -f package.json ] || [ -f package.json5 ] || [ -f package.yaml ]; then \
@@ -97,7 +133,7 @@ pnpm-gate:
 test:
 	@go test $(GO_TEST_FLAGS) $(TEST_FLAGS) $(TEST_PKGS)
 
-ci: pnpm-gate fmt-check lint test
+ci: pnpm-gate fmt-check lint deadcode test docs-check
 
 worker-ci:
 	@pnpm -C internal/tracking/worker lint

@@ -54,13 +54,11 @@ func TestContactsUpdate_BirthdayAndNotes_Set(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--birthday", "2026-02-13", "--notes", "note text"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -103,13 +101,11 @@ func TestContactsUpdate_BirthdayAndNotes_Clear(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--birthday", "", "--notes", ""}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -132,9 +128,7 @@ func TestContactsUpdate_InvalidBirthday(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
-	err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--birthday", "2026/02/13"}, context.Background(), &RootFlags{Account: "a@b.com"})
+	err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--birthday", "2026/02/13"}, withStubPeopleServices(context.Background(), svc), &RootFlags{Account: "a@b.com"})
 	if err == nil || !strings.Contains(err.Error(), "invalid --birthday") {
 		t.Fatalf("expected invalid --birthday error, got %v", err)
 	}
@@ -193,13 +187,11 @@ func TestContactsUpdate_Relation_Set(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--relation", "spouse=Jane", "--relation", "friend=Bob"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -244,13 +236,11 @@ func TestContactsUpdate_Relation_Clear(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--relation", ""}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -286,13 +276,11 @@ func TestContactsCreate_Relation_Set(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsCreateCmd{}, []string{"--given", "Ada", "--relation", "spouse=Charles", "--relation", "friend=Bob"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -345,13 +333,11 @@ func TestContactsUpdate_Address_Set(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--address", "123 Main St", "--address", "456 Side St"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -396,13 +382,11 @@ func TestContactsUpdate_Address_Clear(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--address", ""}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -438,13 +422,11 @@ func TestContactsCreate_Address_Set(t *testing.T) {
 		}
 	}))
 	t.Cleanup(closeSrv)
-	stubPeopleServices(t, svc)
-
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if err != nil {
 		t.Fatalf("ui.New: %v", err)
 	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
 
 	if err := runKong(t, &ContactsCreateCmd{}, []string{"--given", "Ada", "--address", "123 Main St", "--address", "456 Side St"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
 		t.Fatalf("runKong: %v", err)
@@ -458,6 +440,110 @@ func TestContactsCreate_Address_Set(t *testing.T) {
 	}
 	if gotAddresses[1]["streetAddress"] != "456 Side St" {
 		t.Fatalf("unexpected second address: %v", gotAddresses[1])
+	}
+}
+
+func TestContactsCreate_Gender_Set(t *testing.T) {
+	var gotGenders []map[string]any
+
+	svc, closeSrv := newPeopleService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, ":createContact") && r.Method == http.MethodPost:
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if genders, ok := body["genders"].([]any); ok {
+				for _, gender := range genders {
+					if m, ok := gender.(map[string]any); ok {
+						gotGenders = append(gotGenders, m)
+					}
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"resourceName": "people/c1"})
+			return
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(closeSrv)
+	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
+	if err != nil {
+		t.Fatalf("ui.New: %v", err)
+	}
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
+
+	if err := runKong(t, &ContactsCreateCmd{}, []string{"--given", "Ada", "--gender", "female"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+
+	if len(gotGenders) != 1 || gotGenders[0]["value"] != "female" {
+		t.Fatalf("unexpected genders: %#v", gotGenders)
+	}
+}
+
+func TestContactsUpdate_Gender_SetAndClear(t *testing.T) {
+	var gotGetFields string
+	var gotUpdateFields []string
+	var gotGender string
+	var sawClear bool
+
+	svc, closeSrv := newPeopleService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "people/c1") && r.Method == http.MethodGet && !strings.Contains(r.URL.Path, ":"):
+			gotGetFields = r.URL.Query().Get("personFields")
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resourceName": "people/c1",
+				"names":        []map[string]any{{"givenName": "Ada", "familyName": "Lovelace"}},
+				"genders":      []map[string]any{{"value": "female"}},
+			})
+			return
+		case strings.Contains(r.URL.Path, ":updateContact") && (r.Method == http.MethodPatch || r.Method == http.MethodPost):
+			gotUpdateFields = append(gotUpdateFields, r.URL.Query().Get("updatePersonFields"))
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			genders, _ := body["genders"].([]any)
+			if len(genders) == 0 {
+				sawClear = true
+			} else if first, ok := genders[0].(map[string]any); ok {
+				gotGender = primaryValue(first, "value")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"resourceName": "people/c1"})
+			return
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(closeSrv)
+	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
+	if err != nil {
+		t.Fatalf("ui.New: %v", err)
+	}
+	ctx := withStubPeopleServices(ui.WithUI(context.Background(), u), svc)
+
+	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--gender", "male"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong set: %v", err)
+	}
+	if err := runKong(t, &ContactsUpdateCmd{}, []string{"people/c1", "--gender", ""}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong clear: %v", err)
+	}
+
+	if !strings.Contains(gotGetFields, "genders") {
+		t.Fatalf("missing genders in people.get fields: %q", gotGetFields)
+	}
+	if len(gotUpdateFields) != 2 || !strings.Contains(gotUpdateFields[0], "genders") || !strings.Contains(gotUpdateFields[1], "genders") {
+		t.Fatalf("missing gender update fields: %#v", gotUpdateFields)
+	}
+	if gotGender != "male" {
+		t.Fatalf("unexpected gender payload: %q", gotGender)
+	}
+	if !sawClear {
+		t.Fatal("expected empty genders payload for clear")
 	}
 }
 

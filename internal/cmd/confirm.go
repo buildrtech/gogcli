@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/term"
-
 	"github.com/steipete/gogcli/internal/input"
 )
 
@@ -26,12 +24,12 @@ func confirmDestructiveChecked(ctx context.Context, flags *RootFlags, action str
 	}
 
 	// Never prompt in non-interactive contexts.
-	if flags.NoInput || !term.IsTerminal(int(os.Stdin.Fd())) { //nolint:gosec // os file descriptor fits int on supported targets
+	if flags.NoInput || !stdinIsTerminal(ctx) {
 		return usagef("refusing to %s without --force (non-interactive)", action)
 	}
 
 	prompt := fmt.Sprintf("Proceed to %s? [y/N]: ", action)
-	line, readErr := input.PromptLine(ctx, prompt)
+	line, readErr := input.PromptLineFrom(ctx, prompt, stdinReader(ctx))
 	if readErr != nil && !errors.Is(readErr, os.ErrClosed) {
 		if errors.Is(readErr, io.EOF) {
 			return &ExitError{Code: 1, Err: errors.New("cancelled")}

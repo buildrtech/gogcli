@@ -3,8 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
+	"time"
 
 	"google.golang.org/api/drive/v3"
 	gapi "google.golang.org/api/googleapi"
@@ -25,6 +25,28 @@ const (
 	driveResolveReplyCreateFields = "id, author, content, createdTime, action"
 )
 
+// driveReplyActions are the values the Drive Reply.action field accepts.
+// See https://developers.google.com/drive/api/reference/rest/v3/replies.
+const (
+	driveReplyActionResolve = "resolve"
+	driveReplyActionReopen  = "reopen"
+)
+
+// validateDriveReplyAction returns the canonical (lower-case) form of action
+// or an error if it is not one of "", "resolve", or "reopen".
+func validateDriveReplyAction(action string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "":
+		return "", nil
+	case driveReplyActionResolve:
+		return driveReplyActionResolve, nil
+	case driveReplyActionReopen:
+		return driveReplyActionReopen, nil
+	default:
+		return "", fmt.Errorf("invalid --action %q: expected \"resolve\" or \"reopen\"", action)
+	}
+}
+
 type driveCommentListMode int
 
 const (
@@ -39,6 +61,7 @@ type driveCommentListOptions struct {
 	includeQuoted   bool
 	scanForOpen     bool
 	page            string
+	since           string
 	all             bool
 	failEmpty       bool
 	max             int64
@@ -48,7 +71,7 @@ type driveCommentListOptions struct {
 
 func listDriveComments(ctx context.Context, svc *drive.Service, fileID string, opts driveCommentListOptions) ([]*drive.Comment, string, error) {
 	fetch := func(pageToken string) ([]*drive.Comment, string, error) {
-		return fetchDriveCommentsPage(ctx, svc, fileID, opts.max, pageToken, driveCommentFieldsForList(opts))
+		return fetchDriveCommentsPage(ctx, svc, fileID, opts.max, pageToken, opts.since, driveCommentFieldsForList(opts))
 	}
 
 	if opts.all {
@@ -84,7 +107,7 @@ func listDriveComments(ctx context.Context, svc *drive.Service, fileID string, o
 	}
 }
 
-func fetchDriveCommentsPage(ctx context.Context, svc *drive.Service, fileID string, pageSize int64, pageToken string, commentFields string) ([]*drive.Comment, string, error) {
+func fetchDriveCommentsPage(ctx context.Context, svc *drive.Service, fileID string, pageSize int64, pageToken string, since string, commentFields string) ([]*drive.Comment, string, error) {
 	call := svc.Comments.List(fileID).
 		IncludeDeleted(false).
 		PageSize(pageSize).
@@ -93,11 +116,26 @@ func fetchDriveCommentsPage(ctx context.Context, svc *drive.Service, fileID stri
 	if strings.TrimSpace(pageToken) != "" {
 		call = call.PageToken(pageToken)
 	}
+	if strings.TrimSpace(since) != "" {
+		call = call.StartModifiedTime(since)
+	}
 	resp, err := call.Do()
 	if err != nil {
 		return nil, "", err
 	}
 	return resp.Comments, resp.NextPageToken, nil
+}
+
+func normalizeDriveCommentSince(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return "", usagef("invalid --since %q (expected RFC3339 timestamp with timezone)", raw)
+	}
+	return parsed.Format(time.RFC3339Nano), nil
 }
 
 func driveCommentFieldsForList(opts driveCommentListOptions) string {
@@ -129,7 +167,7 @@ func writeDriveCommentList(ctx context.Context, u *ui.UI, opts driveCommentListO
 	} else {
 		printCompactCommentTable(ctx, comments, opts.includeQuoted)
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -235,25 +273,25 @@ func getDriveComment(ctx context.Context, svc *drive.Service, fileID, commentID 
 
 func writeDriveCommentDetail(ctx context.Context, u *ui.UI, comment *drive.Comment, includeAnchor, includeReplyDetails bool) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"comment": comment})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"comment": comment})
 	}
 
-	u.Out().Printf("id\t%s", comment.Id)
+	u.Out().Linef("id\t%s", comment.Id)
 	if comment.Author != nil {
-		u.Out().Printf("author\t%s", comment.Author.DisplayName)
+		u.Out().Linef("author\t%s", comment.Author.DisplayName)
 	}
-	u.Out().Printf("content\t%s", comment.Content)
-	u.Out().Printf("created\t%s", comment.CreatedTime)
-	u.Out().Printf("modified\t%s", comment.ModifiedTime)
-	u.Out().Printf("resolved\t%t", comment.Resolved)
+	u.Out().Linef("content\t%s", comment.Content)
+	u.Out().Linef("created\t%s", comment.CreatedTime)
+	u.Out().Linef("modified\t%s", comment.ModifiedTime)
+	u.Out().Linef("resolved\t%t", comment.Resolved)
 	if comment.QuotedFileContent != nil && comment.QuotedFileContent.Value != "" {
-		u.Out().Printf("quoted\t%s", comment.QuotedFileContent.Value)
+		u.Out().Linef("quoted\t%s", comment.QuotedFileContent.Value)
 	}
 	if includeAnchor && strings.TrimSpace(comment.Anchor) != "" {
-		u.Out().Printf("anchor\t%s", comment.Anchor)
+		u.Out().Linef("anchor\t%s", comment.Anchor)
 	}
 	if len(comment.Replies) > 0 {
-		u.Out().Printf("replies\t%d", len(comment.Replies))
+		u.Out().Linef("replies\t%d", len(comment.Replies))
 	}
 	if includeReplyDetails {
 		for _, reply := range comment.Replies {
@@ -268,7 +306,7 @@ func writeDriveCommentDetail(ctx context.Context, u *ui.UI, comment *drive.Comme
 			if strings.TrimSpace(reply.Action) != "" {
 				action = reply.Action
 			}
-			u.Out().Printf("  reply\t%s\t%s\t%s\t%s", reply.Id, author, truncateString(reply.Content, 60), action)
+			u.Out().Linef("  reply\t%s\t%s\t%s\t%s", reply.Id, author, truncateString(reply.Content, 60), action)
 		}
 	}
 	return nil
@@ -297,63 +335,87 @@ func updateDriveComment(ctx context.Context, svc *drive.Service, fileID, comment
 
 func writeDriveCommentMutation(ctx context.Context, u *ui.UI, comment *drive.Comment, includeAnchor bool) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"comment": comment})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"comment": comment})
 	}
-	u.Out().Printf("id\t%s", comment.Id)
-	u.Out().Printf("content\t%s", comment.Content)
+	u.Out().Linef("id\t%s", comment.Id)
+	u.Out().Linef("content\t%s", comment.Content)
 	if comment.CreatedTime != "" {
-		u.Out().Printf("created\t%s", comment.CreatedTime)
+		u.Out().Linef("created\t%s", comment.CreatedTime)
 	}
 	if comment.ModifiedTime != "" {
-		u.Out().Printf("modified\t%s", comment.ModifiedTime)
+		u.Out().Linef("modified\t%s", comment.ModifiedTime)
 	}
 	if includeAnchor && strings.TrimSpace(comment.Anchor) != "" {
-		u.Out().Printf("anchor\t%s", comment.Anchor)
+		u.Out().Linef("anchor\t%s", comment.Anchor)
 	}
 	return nil
 }
 
-func createDriveReply(ctx context.Context, svc *drive.Service, fileID, commentID, content string) (*drive.Reply, error) {
-	return svc.Replies.Create(fileID, commentID, &drive.Reply{Content: content}).
-		Fields(driveReplyCreateFields).
+// createDriveReplyWithAction posts a reply that also flips the parent comment's
+// resolved state when action is "resolve" or "reopen". An empty action behaves
+// like createDriveReply. Content may be empty when action is set; the API
+// accepts an action-only reply.
+func createDriveReplyWithAction(ctx context.Context, svc *drive.Service, fileID, commentID, content, action string) (*drive.Reply, error) {
+	reply := &drive.Reply{}
+	if msg := strings.TrimSpace(content); msg != "" {
+		reply.Content = msg
+	}
+	fields := gapi.Field(driveReplyCreateFields)
+	if action != "" {
+		reply.Action = action
+		fields = gapi.Field(driveResolveReplyCreateFields)
+	}
+	return svc.Replies.Create(fileID, commentID, reply).
+		Fields(fields).
 		Context(ctx).
 		Do()
 }
 
 func resolveDriveComment(ctx context.Context, svc *drive.Service, fileID, commentID, message string) (*drive.Reply, error) {
-	reply := &drive.Reply{Action: "resolve"}
-	if msg := strings.TrimSpace(message); msg != "" {
-		reply.Content = msg
-	}
-	return svc.Replies.Create(fileID, commentID, reply).
-		Fields(driveResolveReplyCreateFields).
-		Context(ctx).
-		Do()
+	return createDriveReplyWithAction(ctx, svc, fileID, commentID, message, driveReplyActionResolve)
 }
 
-func writeDriveReplyMutation(ctx context.Context, u *ui.UI, reply *drive.Reply, resolved bool, resourceKey, resourceID, commentID string) error {
+func reopenDriveComment(ctx context.Context, svc *drive.Service, fileID, commentID, message string) (*drive.Reply, error) {
+	return createDriveReplyWithAction(ctx, svc, fileID, commentID, message, driveReplyActionReopen)
+}
+
+// writeDriveReplyMutationWithAction renders a reply creation result. When
+// resolved is true and action is set, the envelope reflects the action
+// ("resolved" or "reopened") instead of always saying "resolved". For backward
+// compatibility, action="" with resolved=true falls back to "resolved".
+func writeDriveReplyMutationWithAction(ctx context.Context, u *ui.UI, reply *drive.Reply, resolved bool, action, resourceKey, resourceID, commentID string) error {
 	if outfmt.IsJSON(ctx) {
 		if resolved {
-			return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
-				"resolved":  true,
+			envelope := map[string]any{
 				resourceKey: resourceID,
 				"commentId": commentID,
 				"reply":     reply,
-			})
+			}
+			switch action {
+			case driveReplyActionReopen:
+				envelope["reopened"] = true
+			case driveReplyActionResolve, "":
+				envelope["resolved"] = true
+			}
+			return outfmt.WriteJSON(ctx, stdoutWriter(ctx), envelope)
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"reply": reply})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"reply": reply})
 	}
 
 	if resolved {
-		u.Out().Printf("resolved\ttrue")
-		u.Out().Printf("%s\t%s", resourceKey, resourceID)
-		u.Out().Printf("commentId\t%s", commentID)
+		label := "resolved"
+		if action == driveReplyActionReopen {
+			label = "reopened"
+		}
+		u.Out().Linef("%s\ttrue", label)
+		u.Out().Linef("%s\t%s", resourceKey, resourceID)
+		u.Out().Linef("commentId\t%s", commentID)
 		return nil
 	}
 
-	u.Out().Printf("id\t%s", reply.Id)
-	u.Out().Printf("content\t%s", reply.Content)
-	u.Out().Printf("created\t%s", reply.CreatedTime)
+	u.Out().Linef("id\t%s", reply.Id)
+	u.Out().Linef("content\t%s", reply.Content)
+	u.Out().Linef("created\t%s", reply.CreatedTime)
 	return nil
 }
 

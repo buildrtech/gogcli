@@ -3,8 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 
 	"google.golang.org/api/classroom/v1"
@@ -34,6 +32,9 @@ func (c *ClassroomTopicsListCmd) Run(ctx context.Context, flags *RootFlags) erro
 	if courseID == "" {
 		return usage("empty courseId")
 	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 
 	_, svc, err := requireClassroomService(ctx, flags)
 	if err != nil {
@@ -57,19 +58,16 @@ func (c *ClassroomTopicsListCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return err
 	}
 
-	return writeClassroomPagedList(ctx, "topics", topics, nextPageToken, "No topics", c.FailEmpty, false, func(w io.Writer) {
-		fmt.Fprintln(w, "TOPIC_ID\tNAME\tUPDATED")
-		for _, topic := range topics {
-			if topic == nil {
-				continue
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n",
-				sanitizeTab(topic.TopicId),
-				sanitizeTab(topic.Name),
-				sanitizeTab(topic.UpdateTime),
-			)
-		}
-	})
+	return writeClassroomPagedList(
+		ctx,
+		"topics",
+		topics,
+		nextPageToken,
+		"No topics",
+		c.FailEmpty,
+		false,
+		classroomTopicColumns(),
+	)
 }
 
 type ClassroomTopicsGetCmd struct {
@@ -99,13 +97,13 @@ func (c *ClassroomTopicsGetCmd) Run(ctx context.Context, flags *RootFlags) error
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"topic": topic})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"topic": topic})
 	}
 
-	u.Out().Printf("id\t%s", topic.TopicId)
-	u.Out().Printf("name\t%s", topic.Name)
+	u.Out().Linef("id\t%s", topic.TopicId)
+	u.Out().Linef("name\t%s", topic.Name)
 	if topic.UpdateTime != "" {
-		u.Out().Printf("updated\t%s", topic.UpdateTime)
+		u.Out().Linef("updated\t%s", topic.UpdateTime)
 	}
 	return nil
 }
@@ -145,10 +143,10 @@ func (c *ClassroomTopicsCreateCmd) Run(ctx context.Context, flags *RootFlags) er
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"topic": created})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"topic": created})
 	}
-	u.Out().Printf("id\t%s", created.TopicId)
-	u.Out().Printf("name\t%s", created.Name)
+	u.Out().Linef("id\t%s", created.TopicId)
+	u.Out().Linef("name\t%s", created.Name)
 	return nil
 }
 
@@ -194,10 +192,10 @@ func (c *ClassroomTopicsUpdateCmd) Run(ctx context.Context, flags *RootFlags) er
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"topic": updated})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"topic": updated})
 	}
-	u.Out().Printf("id\t%s", updated.TopicId)
-	u.Out().Printf("name\t%s", updated.Name)
+	u.Out().Linef("id\t%s", updated.TopicId)
+	u.Out().Linef("name\t%s", updated.Name)
 	return nil
 }
 
@@ -217,7 +215,10 @@ func (c *ClassroomTopicsDeleteCmd) Run(ctx context.Context, flags *RootFlags) er
 		return usage("empty topicId")
 	}
 
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("delete topic %s from %s", topicID, courseID)); err != nil {
+	if err := dryRunAndConfirmDestructive(ctx, flags, "classroom.topics.delete", map[string]any{
+		"course_id": courseID,
+		"topic_id":  topicID,
+	}, fmt.Sprintf("delete topic %s from %s", topicID, courseID)); err != nil {
 		return err
 	}
 

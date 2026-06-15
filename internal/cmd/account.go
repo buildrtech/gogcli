@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -10,15 +11,9 @@ import (
 	"github.com/steipete/gogcli/internal/secrets"
 )
 
-var (
-	openSecretsStoreForAccount = secrets.OpenDefault
-	warnDirectAccessToken      = func() {
-		_, _ = fmt.Fprintln(os.Stderr, directAccessTokenWarning)
-	}
-)
-
 const (
 	accessTokenPlaceholderAccount = "access-token-user"
+	adcPlaceholderAccount         = "adc"
 	directAccessTokenWarning      = "Note: Using direct access token (expires in ~1 hour; no auto-refresh)" //nolint:gosec // user-facing warning text, not a credential
 )
 
@@ -26,14 +21,20 @@ func requireAccount(flags *RootFlags) (string, error) {
 	// In ADC mode the service account authenticates as itself — no user email
 	// or keyring lookup is needed. We still accept --account/GOG_ACCOUNT as an
 	// optional label (e.g. for logging), but it is not required.
-	if googleapi.IsADCMode() {
-		if v := strings.TrimSpace(flags.Account); v != "" {
+	if isADCAuthMode(flags) {
+		if v := flagAccount(flags); v != "" {
+			if shouldAutoSelectAccount(v) {
+				return adcPlaceholderAccount, nil
+			}
 			return v, nil
 		}
 		if v := strings.TrimSpace(os.Getenv("GOG_ACCOUNT")); v != "" {
+			if shouldAutoSelectAccount(v) {
+				return adcPlaceholderAccount, nil
+			}
 			return v, nil
 		}
-		return "adc", nil
+		return adcPlaceholderAccount, nil
 	}
 
 	client := config.DefaultClientName
@@ -54,22 +55,32 @@ func requireAccount(flags *RootFlags) (string, error) {
 		return finalizeRequiredAccount(flags, accessTokenPlaceholderAccount), nil
 	}
 
-	if account, ok := inferredStoredAccount(client); ok {
+	if account, ok := inferredStoredAccount(client, flags); ok {
 		return account, nil
 	}
 
 	return "", usage("missing --account (or set GOG_ACCOUNT, set default via `gog auth manage`, or store exactly one token)")
 }
 
+func isADCAuthMode(flags *RootFlags) bool {
+	return flags != nil && flags.authMode == googleapi.AuthModeADC
+}
+
 func configuredAccount(flags *RootFlags) (string, bool, error) {
-	for _, candidate := range []string{flagAccount(flags), strings.TrimSpace(os.Getenv("GOG_ACCOUNT"))} {
-		account, ok, err := selectConfiguredAccount(candidate)
+	if candidate := flagAccount(flags); candidate != "" {
+		account, ok, err := selectConfiguredAccount(flags, candidate)
 		if err != nil {
 			return "", false, err
 		}
-		if ok {
-			return account, true, nil
+		return account, ok, nil
+	}
+
+	if candidate := strings.TrimSpace(os.Getenv("GOG_ACCOUNT")); candidate != "" {
+		account, ok, err := selectConfiguredAccount(flags, candidate)
+		if err != nil {
+			return "", false, err
 		}
+		return account, ok, nil
 	}
 
 	return "", false, nil
@@ -83,8 +94,8 @@ func flagAccount(flags *RootFlags) string {
 	return strings.TrimSpace(flags.Account)
 }
 
-func selectConfiguredAccount(value string) (string, bool, error) {
-	if resolved, ok, err := resolveAccountAlias(value); err != nil {
+func selectConfiguredAccount(flags *RootFlags, value string) (string, bool, error) {
+	if resolved, ok, err := resolveAccountAlias(flags, value); err != nil {
 		return "", false, err
 	} else if ok {
 		return resolved, true, nil
@@ -98,8 +109,8 @@ func selectConfiguredAccount(value string) (string, bool, error) {
 	return value, true, nil
 }
 
-func inferredStoredAccount(client string) (string, bool) {
-	store, err := openSecretsStoreForAccount()
+func inferredStoredAccount(client string, flags *RootFlags) (string, bool) {
+	store, err := openAccountSecretsStore(flags)
 	if err != nil {
 		return "", false
 	}
@@ -138,6 +149,15 @@ func inferredStoredAccount(client string) (string, bool) {
 	return "", false
 }
 
+func openAccountSecretsStore(flags *RootFlags) (secrets.Store, error) {
+	if flags != nil {
+		if openStore := flags.authOperations.OpenSecretsStore; openStore != nil {
+			return openStore()
+		}
+	}
+	return nil, errRuntimeRequired
+}
+
 func directAccessToken(flags *RootFlags) string {
 	if flags == nil {
 		return ""
@@ -152,23 +172,42 @@ func hasDirectAccessToken(flags *RootFlags) bool {
 
 func finalizeRequiredAccount(flags *RootFlags, account string) string {
 	if hasDirectAccessToken(flags) {
-		warnDirectAccessToken()
+		_, _ = fmt.Fprintln(accountDiagnostics(flags), directAccessTokenWarning)
 	}
 
 	return account
 }
 
-func resolveAccountAlias(value string) (string, bool, error) {
+func accountDiagnostics(flags *RootFlags) io.Writer {
+	if flags == nil || flags.diagnostics == nil {
+		return io.Discard
+	}
+	return flags.diagnostics
+}
+
+func resolveAccountAlias(flags *RootFlags, value string) (string, bool, error) {
 	value = strings.TrimSpace(value)
 	if value == "" || strings.Contains(value, "@") || shouldAutoSelectAccount(value) {
 		return "", false, nil
 	}
-	return config.ResolveAccountAlias(value)
+
+	store, err := accountConfigStore(flags)
+	if err != nil {
+		return "", false, err
+	}
+	return store.ResolveAccountAlias(value)
+}
+
+func accountConfigStore(flags *RootFlags) (*config.ConfigStore, error) {
+	if flags != nil && flags.configStoreResolver != nil {
+		return flags.configStoreResolver()
+	}
+	return nil, errRuntimeRequired
 }
 
 func shouldAutoSelectAccount(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "auto", "default":
+	case "auto", eventTypeDefault:
 		return true
 	default:
 		return false

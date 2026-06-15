@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 
 	"google.golang.org/api/calendar/v3"
@@ -21,7 +19,11 @@ type CalendarRespondCmd struct {
 
 func (c *CalendarRespondCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	calendarID, err := prepareCalendarID(c.CalendarID, false)
+	store, err := commandConfigStore(ctx)
+	if err != nil {
+		return err
+	}
+	calendarID, err := prepareCalendarID(store, c.CalendarID, false)
 	if err != nil {
 		return err
 	}
@@ -43,7 +45,7 @@ func (c *CalendarRespondCmd) Run(ctx context.Context, flags *RootFlags) error {
 		}
 	}
 	if !isValid {
-		return fmt.Errorf("invalid status %q; must be one of: %s", status, strings.Join(validStatuses, ", "))
+		return usagef("invalid status %q; must be one of: %s", status, strings.Join(validStatuses, ", "))
 	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "calendar.respond", map[string]any{
@@ -66,7 +68,7 @@ func (c *CalendarRespondCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if len(event.Attendees) == 0 {
-		return errors.New("event has no attendees")
+		return usage("event has no attendees")
 	}
 
 	var selfAttendee *int
@@ -78,11 +80,11 @@ func (c *CalendarRespondCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if selfAttendee == nil {
-		return errors.New("you are not an attendee of this event")
+		return usage("you are not an attendee of this event")
 	}
 
 	if event.Attendees[*selfAttendee].Organizer {
-		return errors.New("cannot respond to your own event (you are the organizer)")
+		return usage("cannot respond to your own event (you are the organizer)")
 	}
 
 	event.Attendees[*selfAttendee].ResponseStatus = status
@@ -103,14 +105,14 @@ func (c *CalendarRespondCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return mutation.writeEvent(ctx, updated)
 	}
 
-	u.Out().Printf("id\t%s", updated.Id)
-	u.Out().Printf("summary\t%s", orEmpty(updated.Summary, "(no title)"))
-	u.Out().Printf("response_status\t%s", status)
+	u.Out().Linef("id\t%s", updated.Id)
+	u.Out().Linef("summary\t%s", orEmpty(updated.Summary, "(no title)"))
+	u.Out().Linef("response_status\t%s", status)
 	if strings.TrimSpace(c.Comment) != "" {
-		u.Out().Printf("comment\t%s", strings.TrimSpace(c.Comment))
+		u.Out().Linef("comment\t%s", strings.TrimSpace(c.Comment))
 	}
 	if updated.HtmlLink != "" {
-		u.Out().Printf("link\t%s", updated.HtmlLink)
+		u.Out().Linef("link\t%s", updated.HtmlLink)
 	}
 	return nil
 }

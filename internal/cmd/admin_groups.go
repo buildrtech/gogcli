@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	admin "google.golang.org/api/admin/directory/v1"
@@ -28,17 +27,19 @@ type AdminGroupsListCmd struct {
 
 func (c *AdminGroupsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	domain := strings.TrimSpace(c.Domain)
+	if domain == "" {
+		return usage("domain required (e.g., --domain example.com)")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	account, err := requireAdminAccount(flags)
 	if err != nil {
 		return err
 	}
 
-	domain := strings.TrimSpace(c.Domain)
-	if domain == "" {
-		return usage("domain required (e.g., --domain example.com)")
-	}
-
-	svc, err := newAdminDirectoryService(ctx, account)
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -58,19 +59,9 @@ func (c *AdminGroupsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return resp.Groups, resp.NextPageToken, nil
 	}
 
-	var groups []*admin.Group
-	nextPageToken := ""
-	if c.All {
-		all, collectErr := collectAllPages(c.Page, fetch)
-		if collectErr != nil {
-			return collectErr
-		}
-		groups = all
-	} else {
-		groups, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	groups, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
@@ -92,7 +83,7 @@ func (c *AdminGroupsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 				DirectMembersCount: group.DirectMembersCount,
 			})
 		}
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"groups":        items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -109,25 +100,10 @@ func (c *AdminGroupsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "EMAIL\tNAME\tMEMBERS\tDESCRIPTION")
-	for _, group := range groups {
-		if group == nil {
-			continue
-		}
-		desc := group.Description
-		if len(desc) > 50 {
-			desc = desc[:47] + "..."
-		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n",
-			sanitizeTab(group.Email),
-			sanitizeTab(group.Name),
-			group.DirectMembersCount,
-			sanitizeTab(desc),
-		)
+	if err := outfmt.WriteTable(ctx, stdoutWriter(ctx), nonNilAdminRows(groups), adminGroupColumns()); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -147,17 +123,19 @@ type AdminGroupsMembersListCmd struct {
 
 func (c *AdminGroupsMembersListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	groupEmail := strings.TrimSpace(c.GroupEmail)
+	if groupEmail == "" {
+		return usage("group email required")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	account, err := requireAdminAccount(flags)
 	if err != nil {
 		return err
 	}
 
-	groupEmail := strings.TrimSpace(c.GroupEmail)
-	if groupEmail == "" {
-		return usage("group email required")
-	}
-
-	svc, err := newAdminDirectoryService(ctx, account)
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -176,19 +154,9 @@ func (c *AdminGroupsMembersListCmd) Run(ctx context.Context, flags *RootFlags) e
 		return resp.Members, resp.NextPageToken, nil
 	}
 
-	var members []*admin.Member
-	nextPageToken := ""
-	if c.All {
-		all, collectErr := collectAllPages(c.Page, fetch)
-		if collectErr != nil {
-			return collectErr
-		}
-		members = all
-	} else {
-		members, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	members, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
@@ -208,7 +176,7 @@ func (c *AdminGroupsMembersListCmd) Run(ctx context.Context, flags *RootFlags) e
 				Type:  member.Type,
 			})
 		}
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"members":       items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -225,20 +193,10 @@ func (c *AdminGroupsMembersListCmd) Run(ctx context.Context, flags *RootFlags) e
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "EMAIL\tROLE\tTYPE")
-	for _, member := range members {
-		if member == nil {
-			continue
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n",
-			sanitizeTab(member.Email),
-			sanitizeTab(member.Role),
-			sanitizeTab(member.Type),
-		)
+	if err := outfmt.WriteTable(ctx, stdoutWriter(ctx), nonNilAdminRows(members), adminMemberColumns()); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -250,15 +208,13 @@ type AdminGroupsMembersAddCmd struct {
 
 func (c *AdminGroupsMembersAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAdminAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	groupEmail := strings.TrimSpace(c.GroupEmail)
 	memberEmail := strings.TrimSpace(c.MemberEmail)
 	if groupEmail == "" || memberEmail == "" {
 		return usage("group email and member email required")
+	}
+	if err := validatePlainEmail("member email", memberEmail); err != nil {
+		return err
 	}
 
 	role := strings.ToUpper(c.Role)
@@ -271,11 +227,19 @@ func (c *AdminGroupsMembersAddCmd) Run(ctx context.Context, flags *RootFlags) er
 		Role:  role,
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, fmt.Sprintf("add %s to %s as %s", memberEmail, groupEmail, role), member); dryRunErr != nil {
+	if dryRunErr := dryRunExit(ctx, flags, "admin.groups.members.add", map[string]any{
+		"group":  groupEmail,
+		"member": member,
+	}); dryRunErr != nil {
 		return dryRunErr
 	}
 
-	svc, err := newAdminDirectoryService(ctx, account)
+	account, err := requireAdminAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -286,13 +250,13 @@ func (c *AdminGroupsMembersAddCmd) Run(ctx context.Context, flags *RootFlags) er
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"email": created.Email,
 			"role":  created.Role,
 		})
 	}
 
-	u.Out().Printf("Added %s to %s as %s", created.Email, groupEmail, created.Role)
+	u.Out().Linef("Added %s to %s as %s", created.Email, groupEmail, created.Role)
 	return nil
 }
 
@@ -302,22 +266,25 @@ type AdminGroupsMembersRemoveCmd struct {
 }
 
 func (c *AdminGroupsMembersRemoveCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAdminAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	groupEmail := strings.TrimSpace(c.GroupEmail)
 	memberEmail := strings.TrimSpace(c.MemberEmail)
 	if groupEmail == "" || memberEmail == "" {
 		return usage("group email and member email required")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("remove %s from %s", memberEmail, groupEmail)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "admin.groups.members.remove", map[string]any{
+		"group":  groupEmail,
+		"member": memberEmail,
+	}, fmt.Sprintf("remove %s from %s", memberEmail, groupEmail)); confirmErr != nil {
 		return confirmErr
 	}
 
-	svc, err := newAdminDirectoryService(ctx, account)
+	account, err := requireAdminAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -327,7 +294,7 @@ func (c *AdminGroupsMembersRemoveCmd) Run(ctx context.Context, flags *RootFlags)
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"removed": true,
 			"email":   memberEmail,
 			"group":   groupEmail,
@@ -335,6 +302,6 @@ func (c *AdminGroupsMembersRemoveCmd) Run(ctx context.Context, flags *RootFlags)
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("Removed %s from %s", memberEmail, groupEmail)
+	u.Out().Linef("Removed %s from %s", memberEmail, groupEmail)
 	return nil
 }

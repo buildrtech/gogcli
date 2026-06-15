@@ -26,10 +26,6 @@ type SlidesCreateFromTemplateCmd struct {
 
 func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 
 	templateID := normalizeGoogleID(strings.TrimSpace(c.TemplateID))
 	if templateID == "" {
@@ -44,7 +40,7 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 	// Parse replacements from both sources
 	replacements, err := c.parseReplacements()
 	if err != nil {
-		return err
+		return newUsageError(err)
 	}
 
 	if len(replacements) == 0 {
@@ -62,8 +58,13 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 		return dryRunErr
 	}
 
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
 	// Create Drive service to copy the template
-	driveSvc, err := newDriveService(ctx, account)
+	driveSvc, err := driveService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -97,7 +98,7 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 	presentationID := created.Id
 
 	// Create Slides service for text replacement
-	slidesSvc, err := newSlidesService(ctx, account)
+	slidesSvc, err := slidesService(ctx, account)
 	if err != nil {
 		return fmt.Errorf("failed to create slides service: %w", err)
 	}
@@ -109,9 +110,9 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 		Requests: requests,
 	}).Context(ctx).Do()
 	if err != nil {
-		u.Err().Printf("Warning: presentation created but text replacement failed: %v", err)
-		u.Err().Printf("Presentation ID: %s", presentationID)
-		u.Err().Printf("You may need to manually edit or delete this presentation")
+		u.Err().Linef("Warning: presentation created but text replacement failed: %v", err)
+		u.Err().Linef("Presentation ID: %s", presentationID)
+		u.Err().Linef("You may need to manually edit or delete this presentation")
 		return fmt.Errorf("text replacement failed: %w", err)
 	}
 
@@ -119,7 +120,7 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 
 	// Output results
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"presentationId": presentationID,
 			"name":           created.Name,
 			"link":           created.WebViewLink,
@@ -127,11 +128,11 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 		})
 	}
 
-	u.Out().Printf("Created presentation from template")
-	u.Out().Printf("id\t%s", presentationID)
-	u.Out().Printf("name\t%s", created.Name)
+	u.Out().Linef("Created presentation from template")
+	u.Out().Linef("id\t%s", presentationID)
+	u.Out().Linef("name\t%s", created.Name)
 	if created.WebViewLink != "" {
-		u.Out().Printf("link\t%s", created.WebViewLink)
+		u.Out().Linef("link\t%s", created.WebViewLink)
 	}
 
 	if len(replacementStats) > 0 {
@@ -139,9 +140,9 @@ func (c *SlidesCreateFromTemplateCmd) Run(ctx context.Context, flags *RootFlags)
 		u.Out().Println("Replacements:")
 		for key, count := range replacementStats {
 			if count > 0 {
-				u.Out().Printf("  %s\t%d occurrences", key, count)
+				u.Out().Linef("  %s\t%d occurrences", key, count)
 			} else {
-				u.Out().Printf("  %s\tnot found", key)
+				u.Out().Linef("  %s\tnot found", key)
 			}
 		}
 	}

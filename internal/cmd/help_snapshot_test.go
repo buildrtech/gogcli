@@ -35,10 +35,19 @@ func TestHelpSnapshot_Auth(t *testing.T) {
 	)
 }
 
+func TestHelpSnapshot_AuthImport(t *testing.T) {
+	out := captureHelpOutput(t, "auth", "import", "--help")
+	requireHelpContains(t, out,
+		"required refresh token",
+		"requires a refresh-token source",
+		"optional access token",
+	)
+}
+
 func TestHelpSnapshot_DocsUpdate(t *testing.T) {
 	out := captureHelpOutput(t, "docs", "update", "--help")
 	requireHelpContains(t, out,
-		"--tab-id",
+		"--tab",
 		"--text",
 		"--file",
 		"--index",
@@ -66,10 +75,36 @@ func TestHelpSnapshot_Forms(t *testing.T) {
 	)
 }
 
+func TestHelpSnapshot_Meet(t *testing.T) {
+	out := captureHelpOutput(t, "meet", "--help")
+	requireHelpContains(t, out,
+		"\n  create",
+		"\n  get",
+		"\n  update",
+		"\n  end",
+		"\n  history",
+		"\n  participants",
+	)
+}
+
 func TestHelpSnapshot_Admin(t *testing.T) {
 	out := captureHelpOutput(t, "admin", "--help")
 	requireHelpContains(t, out,
 		"\n  users",
 		"\n  groups",
 	)
+}
+
+func TestHelpSnapshot_RootAutomationContract(t *testing.T) {
+	out := captureHelpOutput(t, "--help")
+	requireHelpContains(t, out,
+		"\nAutomation:\n",
+		"Use --json or --plain for stable output",
+		`Use "gog help <command>"`,
+		"Exit codes: 0 success",
+		`Run "gog schema --json"`,
+	)
+	if strings.Contains(out, "\n  capabilities") || strings.Contains(out, "\n  exit-codes") {
+		t.Fatalf("removed discovery commands leaked into help: %q", out)
+	}
 }

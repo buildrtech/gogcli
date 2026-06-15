@@ -7,12 +7,14 @@ import (
 	"google.golang.org/api/classroom/v1"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/driveactivity/v2"
 	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/meet/v2"
 	"google.golang.org/api/sheets/v4"
 )
 
 func requireDocsService(ctx context.Context, flags *RootFlags) (*docs.Service, error) {
-	_, svc, err := requireGoogleService(ctx, flags, newDocsService)
+	_, svc, err := requireGoogleService(ctx, flags, docsService)
 	if err != nil {
 		return nil, err
 	}
@@ -20,23 +22,31 @@ func requireDocsService(ctx context.Context, flags *RootFlags) (*docs.Service, e
 }
 
 func requireDriveService(ctx context.Context, flags *RootFlags) (string, *drive.Service, error) {
-	return requireGoogleService(ctx, flags, newDriveService)
+	return requireGoogleService(ctx, flags, driveService)
+}
+
+func requireDriveActivityService(ctx context.Context, flags *RootFlags) (string, *driveactivity.Service, error) {
+	return requireGoogleService(ctx, flags, driveActivityService)
 }
 
 func requireCalendarService(ctx context.Context, flags *RootFlags) (string, *calendar.Service, error) {
-	return requireGoogleService(ctx, flags, newCalendarService)
+	return requireGoogleService(ctx, flags, calendarService)
 }
 
 func requireGmailService(ctx context.Context, flags *RootFlags) (string, *gmail.Service, error) {
-	return requireGoogleService(ctx, flags, newGmailService)
+	return requireGoogleService(ctx, flags, gmailService)
 }
 
 func requireClassroomService(ctx context.Context, flags *RootFlags) (string, *classroom.Service, error) {
-	return requireGoogleService(ctx, flags, newClassroomService)
+	return requireGoogleService(ctx, flags, classroomService)
+}
+
+func requireMeetService(ctx context.Context, flags *RootFlags) (string, *meet.Service, error) {
+	return requireGoogleService(ctx, flags, meetService)
 }
 
 func requireSheetsService(ctx context.Context, flags *RootFlags) (string, *sheets.Service, error) {
-	return requireGoogleService(ctx, flags, newSheetsService)
+	return requireGoogleService(ctx, flags, sheetsService)
 }
 
 func requireGoogleService[T any](ctx context.Context, flags *RootFlags, newService func(context.Context, string) (*T, error)) (string, *T, error) {

@@ -1,11 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -28,9 +29,6 @@ func newCalendarServiceFromServer(t *testing.T, srv *httptest.Server) *calendar.
 }
 
 func TestCalendarCreateCmd_RunJSON(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
 		if r.Method == http.MethodPost && path == "/calendars/cal@example.com/events" {
@@ -53,30 +51,23 @@ func TestCalendarCreateCmd_RunJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONContext(t)
+	ctx, output := newCalendarTestJSONContext(t, svc)
 
 	cmd := &CalendarCreateCmd{}
-	out := captureStdout(t, func() {
-		if err := runKong(t, cmd, []string{
-			"cal@example.com",
-			"--summary", "Meeting",
-			"--from", "2025-01-02T10:00:00Z",
-			"--to", "2025-01-02T11:00:00Z",
-		}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
-			t.Fatalf("runKong: %v", err)
-		}
-	})
-	if !strings.Contains(out, "\"event\"") {
-		t.Fatalf("unexpected output: %q", out)
+	if err := runKong(t, cmd, []string{
+		"cal@example.com",
+		"--summary", "Meeting",
+		"--from", "2025-01-02T10:00:00Z",
+		"--to", "2025-01-02T11:00:00Z",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	if !strings.Contains(output.String(), "\"event\"") {
+		t.Fatalf("unexpected output: %q", output.String())
 	}
 }
 
 func TestCalendarCreateCmd_WithMeetAndAttachments(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var sawConference, sawAttachments bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -103,9 +94,7 @@ func TestCalendarCreateCmd_WithMeetAndAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarCreateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -124,9 +113,6 @@ func TestCalendarCreateCmd_WithMeetAndAttachments(t *testing.T) {
 }
 
 func TestCalendarCreateCmd_RecurringOffsetTimezoneFallback(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotEvent calendar.Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -157,9 +143,7 @@ func TestCalendarCreateCmd_RecurringOffsetTimezoneFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarCreateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -183,10 +167,30 @@ func TestCalendarCreateCmd_RecurringOffsetTimezoneFallback(t *testing.T) {
 	}
 }
 
-func TestCalendarUpdateCmd_RecurrenceFillsMissingTimezone(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
+func TestCalendarCreateCmd_ExplicitTimezones(t *testing.T) {
+	plan, err := buildCalendarCreatePlan(defaultConfigStoreForTest(t), calendarCreateInput{
+		CalendarID:    "primary",
+		Summary:       "Flight",
+		From:          "2026-08-13T13:40:00+02:00",
+		To:            "2026-08-13T17:00:00-04:00",
+		StartTimezone: "Europe/Rome",
+		EndTimezone:   "America/New_York",
+		SendUpdates:   "none",
+		Transparency:  "opaque",
+		Visibility:    "default",
+	}, calendarCreateFields{})
+	if err != nil {
+		t.Fatalf("buildCalendarCreatePlan: %v", err)
+	}
+	if plan.Event.Start == nil || plan.Event.Start.TimeZone != "Europe/Rome" {
+		t.Fatalf("expected start timezone Europe/Rome, got %#v", plan.Event.Start)
+	}
+	if plan.Event.End == nil || plan.Event.End.TimeZone != "America/New_York" {
+		t.Fatalf("expected end timezone America/New_York, got %#v", plan.Event.End)
+	}
+}
 
+func TestCalendarUpdateCmd_RecurrenceFillsMissingTimezone(t *testing.T) {
 	var (
 		gotPatch      calendar.Event
 		currentLoaded bool
@@ -239,9 +243,7 @@ func TestCalendarUpdateCmd_RecurrenceFillsMissingTimezone(t *testing.T) {
 	defer srv.Close()
 
 	svc := newCalendarServiceFromServer(t, srv)
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONContext(t)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarUpdateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -267,9 +269,6 @@ func TestCalendarUpdateCmd_RecurrenceFillsMissingTimezone(t *testing.T) {
 }
 
 func TestCalendarUpdateCmd_RunJSON(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
 		if r.Method == http.MethodPatch && path == "/calendars/cal@example.com/events/ev" {
@@ -292,30 +291,319 @@ func TestCalendarUpdateCmd_RunJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx, output := newCalendarTestJSONContext(t, svc)
 
 	cmd := &CalendarUpdateCmd{}
-	out := captureStdout(t, func() {
-		if err := runKong(t, cmd, []string{
-			"cal@example.com",
-			"ev",
-			"--summary", "Updated",
-			"--scope", "all",
-		}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
-			t.Fatalf("runKong: %v", err)
+	if err := runKong(t, cmd, []string{
+		"cal@example.com",
+		"ev",
+		"--summary", "Updated",
+		"--scope", "all",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	if !strings.Contains(output.String(), "\"event\"") {
+		t.Fatalf("unexpected output: %q", output.String())
+	}
+}
+
+func TestCalendarUpdateCmd_AttachmentsReplaceAndClear(t *testing.T) {
+	var patchCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		if r.Method != http.MethodPatch || path != "/calendars/cal@example.com/events/ev" {
+			http.NotFound(w, r)
+			return
 		}
-	})
-	if !strings.Contains(out, "\"event\"") {
-		t.Fatalf("unexpected output: %q", out)
+		patchCalls++
+		if got := r.URL.Query().Get("supportsAttachments"); got != "true" {
+			t.Fatalf("supportsAttachments = %q, want true", got)
+		}
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode patch body: %v", err)
+		}
+		raw, ok := body["attachments"]
+		if !ok {
+			t.Fatalf("patch %d missing attachments: %#v", patchCalls, body)
+		}
+		var attachments []*calendar.EventAttachment
+		if err := json.Unmarshal(raw, &attachments); err != nil {
+			t.Fatalf("decode attachments: %v", err)
+		}
+		switch patchCalls {
+		case 1:
+			if len(attachments) != 2 ||
+				attachments[0].FileUrl != "https://drive.google.com/file/d/one" ||
+				attachments[1].FileUrl != "https://drive.google.com/file/d/two" {
+				t.Fatalf("unexpected replacement attachments: %#v", attachments)
+			}
+		case 2:
+			if attachments == nil || len(attachments) != 0 {
+				t.Fatalf("expected explicit empty attachments array, got %#v", attachments)
+			}
+		default:
+			t.Fatalf("unexpected patch call %d", patchCalls)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "ev"})
+	}))
+	defer srv.Close()
+
+	svc := newCalendarServiceFromServer(t, srv)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
+
+	if err := runKong(t, &CalendarUpdateCmd{}, []string{
+		"cal@example.com", "ev",
+		"--attachment", "https://drive.google.com/file/d/one",
+		"--attachment", "https://drive.google.com/file/d/two",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("replace attachments: %v", err)
+	}
+	if err := runKong(t, &CalendarUpdateCmd{}, []string{
+		"cal@example.com", "ev", "--attachment=",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("clear attachments: %v", err)
+	}
+	if patchCalls != 2 {
+		t.Fatalf("patch calls = %d, want 2", patchCalls)
+	}
+}
+
+func TestCalendarUpdateCmd_AttachmentClearDryRunReportsSupport(t *testing.T) {
+	var output bytes.Buffer
+	ctx := withCalendarTestServiceFactory(
+		newCmdRuntimeJSONOutputContext(t, &output, io.Discard),
+		func(context.Context, string) (*calendar.Service, error) {
+			t.Fatal("calendar service should not be created during dry-run")
+			return nil, context.Canceled
+		},
+	)
+	err := runKong(t, &CalendarUpdateCmd{}, []string{
+		"primary", "ev", "--attachment=",
+	}, ctx, &RootFlags{Account: "a@b.com", DryRun: true})
+	if err != nil && ExitCode(err) != 0 {
+		t.Fatalf("dry-run: %v", err)
+	}
+
+	var payload struct {
+		Request struct {
+			SupportsAttachments bool `json:"supports_attachments"`
+			Patch               struct {
+				Attachments []*calendar.EventAttachment `json:"attachments"`
+			} `json:"patch"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal dry-run: %v\n%s", err, output.String())
+	}
+	if !payload.Request.SupportsAttachments {
+		t.Fatal("expected supports_attachments for clear")
+	}
+	if payload.Request.Patch.Attachments == nil || len(payload.Request.Patch.Attachments) != 0 {
+		t.Fatalf("expected explicit empty attachment list: %#v", payload.Request.Patch.Attachments)
+	}
+}
+
+func TestCalendarUpdateCmd_WithMeet(t *testing.T) {
+	var (
+		sawConferenceData bool
+		sawVersion        bool
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		switch {
+		case r.Method == http.MethodGet && path == "/calendars/cal@example.com/events/ev":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "ev",
+			})
+			return
+		case r.Method == http.MethodPatch && path == "/calendars/cal@example.com/events/ev":
+			sawVersion = r.URL.Query().Get("conferenceDataVersion") == "1"
+			var body calendar.Event
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			sawConferenceData = body.ConferenceData != nil &&
+				body.ConferenceData.CreateRequest != nil &&
+				body.ConferenceData.CreateRequest.ConferenceSolutionKey != nil &&
+				body.ConferenceData.CreateRequest.ConferenceSolutionKey.Type == "hangoutsMeet"
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":          "ev",
+				"hangoutLink": "https://meet.google.com/aaa-bbbb-ccc",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	svc := newCalendarServiceFromServer(t, srv)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
+
+	cmd := &CalendarUpdateCmd{}
+	if err := runKong(t, cmd, []string{
+		"cal@example.com",
+		"ev",
+		"--with-meet",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	if !sawConferenceData {
+		t.Fatalf("expected conferenceData create request in patch body")
+	}
+	if !sawVersion {
+		t.Fatalf("expected conferenceDataVersion=1 on patch request")
+	}
+}
+
+func TestCalendarUpdateCmd_WithMeetExistingConferenceIsIdempotent(t *testing.T) {
+	var sawPatch bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		switch {
+		case r.Method == http.MethodGet && path == "/calendars/cal@example.com/events/ev":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":          "ev",
+				"hangoutLink": "https://meet.google.com/existing",
+				"conferenceData": map[string]any{
+					"entryPoints": []map[string]any{
+						{"entryPointType": calendarEntryPointTypeVideo, "uri": "https://meet.google.com/existing"},
+					},
+				},
+			})
+			return
+		case r.Method == http.MethodPatch && path == "/calendars/cal@example.com/events/ev":
+			sawPatch = true
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ev"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	svc := newCalendarServiceFromServer(t, srv)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
+
+	cmd := &CalendarUpdateCmd{}
+	if err := runKong(t, cmd, []string{
+		"cal@example.com",
+		"ev",
+		"--with-meet",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	if sawPatch {
+		t.Fatalf("expected existing Meet link to skip patch")
+	}
+}
+
+func TestCalendarUpdateCmd_RegenerateMeetReplacesConference(t *testing.T) {
+	var sawPatch bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		if r.Method == http.MethodPatch && path == "/calendars/cal@example.com/events/ev" {
+			sawPatch = true
+			if r.URL.Query().Get("conferenceDataVersion") != "1" {
+				t.Fatalf("expected conferenceDataVersion=1")
+			}
+			var body calendar.Event
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.ConferenceData == nil || body.ConferenceData.CreateRequest == nil {
+				t.Fatalf("expected conferenceData create request")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":          "ev",
+				"hangoutLink": "https://meet.google.com/replaced",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	svc := newCalendarServiceFromServer(t, srv)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
+
+	cmd := &CalendarUpdateCmd{}
+	if err := runKong(t, cmd, []string{
+		"cal@example.com",
+		"ev",
+		"--regenerate-meet",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	if !sawPatch {
+		t.Fatalf("expected patch")
+	}
+}
+
+func TestCalendarUpdateCmd_WithMeetScopeFutureExistingConferenceIsIdempotent(t *testing.T) {
+	var patchCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		switch {
+		case r.Method == http.MethodGet && path == "/calendars/cal@example.com/events/ev_instance":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":               "ev_instance",
+				"recurringEventId": "ev",
+				"hangoutLink":      "https://meet.google.com/existing",
+			})
+			return
+		case r.Method == http.MethodGet && path == "/calendars/cal@example.com/events/ev":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         "ev",
+				"recurrence": []string{"RRULE:FREQ=DAILY"},
+			})
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/calendars/cal@example.com/events/ev/instances"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{
+						"id":          "ev_instance",
+						"hangoutLink": "https://meet.google.com/existing",
+						"originalStartTime": map[string]any{
+							"dateTime": "2025-01-02T10:00:00Z",
+						},
+					},
+				},
+			})
+			return
+		case r.Method == http.MethodPatch:
+			patchCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "patched"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	svc := newCalendarServiceFromServer(t, srv)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
+
+	cmd := &CalendarUpdateCmd{}
+	if err := runKong(t, cmd, []string{
+		"cal@example.com",
+		"ev_instance",
+		"--with-meet",
+		"--scope", "future",
+		"--original-start", "2025-01-02T10:00:00Z",
+	}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	if patchCalled {
+		t.Fatalf("expected existing Meet link to skip future-scope patch/truncation")
 	}
 }
 
 func TestCalendarUpdateCmd_AddAttendee(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var patchedAttendees int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -353,9 +641,7 @@ func TestCalendarUpdateCmd_AddAttendee(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarUpdateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -372,9 +658,6 @@ func TestCalendarUpdateCmd_AddAttendee(t *testing.T) {
 }
 
 func TestCalendarCreateCmd_EventTypeFocusTimeDefaults(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotEvent calendar.Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -398,9 +681,7 @@ func TestCalendarCreateCmd_EventTypeFocusTimeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarCreateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -433,9 +714,6 @@ func TestCalendarCreateCmd_EventTypeFocusTimeDefaults(t *testing.T) {
 }
 
 func TestCalendarCreateCmd_EventTypeWorkingLocation(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotEvent calendar.Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -459,9 +737,7 @@ func TestCalendarCreateCmd_EventTypeWorkingLocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarCreateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -499,9 +775,6 @@ func TestCalendarCreateCmd_EventTypeWorkingLocation(t *testing.T) {
 }
 
 func TestCalendarUpdateCmd_EventTypeOOO(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotEvent calendar.Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -525,9 +798,7 @@ func TestCalendarUpdateCmd_EventTypeOOO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarUpdateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -556,9 +827,6 @@ func TestCalendarUpdateCmd_EventTypeOOO(t *testing.T) {
 }
 
 func TestCalendarUpdateCmd_EventTypeWorkingLocationDefaults(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotEvent calendar.Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -582,9 +850,7 @@ func TestCalendarUpdateCmd_EventTypeWorkingLocationDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarUpdateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -609,9 +875,6 @@ func TestCalendarUpdateCmd_EventTypeWorkingLocationDefaults(t *testing.T) {
 }
 
 func TestCalendarUpdateCmd_SendUpdates(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotSendUpdates string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -651,9 +914,7 @@ func TestCalendarUpdateCmd_SendUpdates(t *testing.T) {
 	defer srv.Close()
 
 	svc := newCalendarServiceFromServer(t, srv)
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONContext(t)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarUpdateCmd{}
 	if err := runKong(t, cmd, []string{
@@ -670,9 +931,6 @@ func TestCalendarUpdateCmd_SendUpdates(t *testing.T) {
 }
 
 func TestCalendarCreateCmd_ReminderPopupZeroForceSendsMinutes(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var gotEvent map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -705,9 +963,7 @@ func TestCalendarCreateCmd_ReminderPopupZeroForceSendsMinutes(t *testing.T) {
 	defer srv.Close()
 
 	svc := newCalendarServiceFromServer(t, srv)
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONContext(t)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 	cmd := &CalendarCreateCmd{}
 	if err := runKong(t, cmd, []string{
 		"cal",
@@ -741,9 +997,6 @@ func TestCalendarCreateCmd_ReminderPopupZeroForceSendsMinutes(t *testing.T) {
 }
 
 func TestCalendarUpdateCmd_AddAttendeeNoOp(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var patchCalled bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
@@ -779,9 +1032,7 @@ func TestCalendarUpdateCmd_AddAttendeeNoOp(t *testing.T) {
 	defer srv.Close()
 
 	svc := newCalendarServiceFromServer(t, srv)
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONContext(t)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 	cmd := &CalendarUpdateCmd{}
 	err := runKong(t, cmd, []string{
 		"cal",
@@ -800,9 +1051,6 @@ func TestCalendarUpdateCmd_AddAttendeeNoOp(t *testing.T) {
 }
 
 func TestCalendarUpdateCmd_ScopeFuture(t *testing.T) {
-	origNew := newCalendarService
-	t.Cleanup(func() { newCalendarService = origNew })
-
 	var (
 		truncated               bool
 		instancePatchUpdatesVal string
@@ -850,9 +1098,7 @@ func TestCalendarUpdateCmd_ScopeFuture(t *testing.T) {
 	defer srv.Close()
 
 	svc := newCalendarServiceFromServer(t, srv)
-	newCalendarService = func(context.Context, string) (*calendar.Service, error) { return svc, nil }
-
-	ctx := newCalendarJSONContext(t)
+	ctx := withCalendarTestService(newCmdRuntimeJSONOutputContext(t, io.Discard, io.Discard), svc)
 
 	cmd := &CalendarUpdateCmd{}
 	if err := runKong(t, cmd, []string{

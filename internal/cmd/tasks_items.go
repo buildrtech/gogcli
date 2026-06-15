@@ -3,9 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"time"
 
 	"github.com/alecthomas/kong"
 	"google.golang.org/api/tasks/v1"
@@ -38,16 +36,19 @@ type TasksListCmd struct {
 
 func (c *TasksListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	tasklistID := strings.TrimSpace(c.TasklistID)
 	if tasklistID == "" {
 		return usage("empty tasklistId")
 	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -82,31 +83,20 @@ func (c *TasksListCmd) Run(ctx context.Context, flags *RootFlags) error {
 			call = call.UpdatedMin(strings.TrimSpace(c.UpdatedMin))
 		}
 
-		resp, err := call.Context(ctx).Do()
-		if err != nil {
-			return nil, "", err
+		resp, callErr := call.Context(ctx).Do()
+		if callErr != nil {
+			return nil, "", callErr
 		}
 		return resp.Items, resp.NextPageToken, nil
 	}
 
-	var items []*tasks.Task
-	nextPageToken := ""
-	if c.All {
-		all, err := collectAllPages(c.Page, fetch)
-		if err != nil {
-			return err
-		}
-		items = all
-	} else {
-		var err error
-		items, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	items, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"tasks":         items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -133,7 +123,7 @@ func (c *TasksListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.Id, t.Title, status, strings.TrimSpace(t.Due), strings.TrimSpace(t.Updated))
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -157,7 +147,7 @@ func (c *TasksGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty taskId")
 	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -171,18 +161,18 @@ func (c *TasksGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"task": task})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"task": task})
 	}
-	u.Out().Printf("id\t%s", task.Id)
-	u.Out().Printf("title\t%s", task.Title)
+	u.Out().Linef("id\t%s", task.Id)
+	u.Out().Linef("title\t%s", task.Title)
 	if strings.TrimSpace(task.Status) != "" {
-		u.Out().Printf("status\t%s", task.Status)
+		u.Out().Linef("status\t%s", task.Status)
 	}
 	if strings.TrimSpace(task.Due) != "" {
-		u.Out().Printf("due\t%s", task.Due)
+		u.Out().Linef("due\t%s", task.Due)
 	}
 	if strings.TrimSpace(task.WebViewLink) != "" {
-		u.Out().Printf("link\t%s", task.WebViewLink)
+		u.Out().Linef("link\t%s", task.WebViewLink)
 	}
 	return nil
 }
@@ -201,99 +191,26 @@ type TasksAddCmd struct {
 	RepeatUntil string `name:"repeat-until" help:"Repeat until date/time (RFC3339 or YYYY-MM-DD; requires --repeat, --recur, or --recur-rrule)"`
 }
 
-type tasksAddRepeatConfig struct {
-	Unit      repeatUnit
-	Interval  int
-	Repeat    string
-	Recur     string
-	RecurRule string
-	Until     string
-}
-
-func resolveTasksAddRepeatConfig(c *TasksAddCmd, due string) (tasksAddRepeatConfig, error) {
-	config := tasksAddRepeatConfig{
-		Interval:  1,
-		Repeat:    strings.TrimSpace(c.Repeat),
-		Recur:     strings.TrimSpace(c.Recur),
-		RecurRule: strings.TrimSpace(c.RecurRRule),
-		Until:     strings.TrimSpace(c.RepeatUntil),
-	}
-
-	if config.Repeat != "" && (config.Recur != "" || config.RecurRule != "") {
-		return tasksAddRepeatConfig{}, usage("--repeat cannot be combined with --recur or --recur-rrule")
-	}
-	if config.Recur != "" && config.RecurRule != "" {
-		return tasksAddRepeatConfig{}, usage("--recur and --recur-rrule are mutually exclusive")
-	}
-
-	var err error
-	switch {
-	case config.RecurRule != "":
-		config.Unit, config.Interval, err = parseRepeatRRule(config.RecurRule)
-	case config.Recur != "":
-		config.Unit, err = parseRepeatUnit(config.Recur)
-	default:
-		config.Unit, err = parseRepeatUnit(config.Repeat)
-	}
-	if err != nil {
-		return tasksAddRepeatConfig{}, err
-	}
-
-	if config.Unit == repeatNone && (config.Until != "" || c.RepeatCount != 0) {
-		return tasksAddRepeatConfig{}, usage("--repeat, --recur, or --recur-rrule is required when using --repeat-count or --repeat-until")
-	}
-
-	if config.Unit != repeatNone {
-		if due == "" {
-			return tasksAddRepeatConfig{}, usage("--due is required when using --repeat, --recur, or --recur-rrule")
-		}
-		if c.RepeatCount < 0 {
-			return tasksAddRepeatConfig{}, usage("--repeat-count must be >= 0")
-		}
-		if config.Until == "" && c.RepeatCount == 0 {
-			if config.Recur != "" || config.RecurRule != "" {
-				return tasksAddRepeatConfig{}, usage("Google Tasks API does not support server-side recurring metadata; use --repeat-count or --repeat-until with --recur/--recur-rrule to materialize occurrences")
-			}
-			return tasksAddRepeatConfig{}, usage("--repeat requires --repeat-count or --repeat-until")
-		}
-	}
-
-	return config, nil
-}
-
 func (c *TasksAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	tasklistID := strings.TrimSpace(c.TasklistID)
-	if tasklistID == "" {
-		return usage("empty tasklistId")
-	}
-	title := strings.TrimSpace(c.Title)
-	if title == "" {
-		return usage("required: --title")
-	}
-	notes := strings.TrimSpace(c.Notes)
-	due := strings.TrimSpace(c.Due)
-	parent := strings.TrimSpace(c.Parent)
-	previous := strings.TrimSpace(c.Previous)
-	repeatConfig, err := resolveTasksAddRepeatConfig(c, due)
+	plan, err := newTasksAddPlan(tasksAddInput{
+		TasklistID:  c.TasklistID,
+		Title:       c.Title,
+		Notes:       c.Notes,
+		Due:         c.Due,
+		Parent:      c.Parent,
+		Previous:    c.Previous,
+		Repeat:      c.Repeat,
+		Recur:       c.Recur,
+		RecurRRule:  c.RecurRRule,
+		RepeatCount: c.RepeatCount,
+		RepeatUntil: c.RepeatUntil,
+	})
 	if err != nil {
 		return err
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "tasks.add", map[string]any{
-		"tasklist_id":  tasklistID,
-		"title":        title,
-		"notes":        notes,
-		"due":          due,
-		"parent":       parent,
-		"previous":     previous,
-		"repeat":       repeatConfig.Repeat,
-		"recur":        repeatConfig.Recur,
-		"recur_rrule":  repeatConfig.RecurRule,
-		"repeat_step":  repeatConfig.Interval,
-		"repeat_count": c.RepeatCount,
-		"repeat_until": repeatConfig.Until,
-	}); dryRunErr != nil {
+	if dryRunErr := dryRunExit(ctx, flags, "tasks.add", plan.dryRunPayload()); dryRunErr != nil {
 		return dryRunErr
 	}
 
@@ -302,33 +219,29 @@ func (c *TasksAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	if repeatConfig.Unit == repeatNone {
-		svc, svcErr := newTasksService(ctx, account)
+	if !plan.repeating() {
+		svc, svcErr := tasksService(ctx, account)
 		if svcErr != nil {
 			return svcErr
 		}
-		tasklistID, err = resolveTasklistID(ctx, svc, tasklistID)
+		plan.TasklistID, err = resolveTasklistID(ctx, svc, plan.TasklistID)
 		if err != nil {
 			return err
 		}
 		if !outfmt.IsJSON(ctx) {
-			warnTasksDueTime(u, due)
-		}
-		dueValue, dueErr := normalizeTaskDue(due)
-		if dueErr != nil {
-			return dueErr
+			warnTasksDueTime(u, plan.Due)
 		}
 		task := &tasks.Task{
-			Title: title,
-			Notes: notes,
-			Due:   dueValue,
+			Title: plan.Title,
+			Notes: plan.Notes,
+			Due:   plan.Date.DueValue,
 		}
-		call := svc.Tasks.Insert(tasklistID, task)
-		if parent != "" {
-			call = call.Parent(parent)
+		call := svc.Tasks.Insert(plan.TasklistID, task)
+		if plan.Parent != "" {
+			call = call.Parent(plan.Parent)
 		}
-		if previous != "" {
-			call = call.Previous(previous)
+		if plan.Previous != "" {
+			call = call.Previous(plan.Previous)
 		}
 
 		created, createErr := call.Do()
@@ -336,117 +249,87 @@ func (c *TasksAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 			return createErr
 		}
 		if outfmt.IsJSON(ctx) {
-			return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"task": created})
+			return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"task": created})
 		}
-		u.Out().Printf("id\t%s", created.Id)
-		u.Out().Printf("title\t%s", created.Title)
+		u.Out().Linef("id\t%s", created.Id)
+		u.Out().Linef("title\t%s", created.Title)
 		if strings.TrimSpace(created.Status) != "" {
-			u.Out().Printf("status\t%s", created.Status)
+			u.Out().Linef("status\t%s", created.Status)
 		}
 		if strings.TrimSpace(created.Due) != "" {
-			u.Out().Printf("due\t%s", created.Due)
+			u.Out().Linef("due\t%s", created.Due)
 		}
 		if strings.TrimSpace(created.WebViewLink) != "" {
-			u.Out().Printf("link\t%s", created.WebViewLink)
+			u.Out().Linef("link\t%s", created.WebViewLink)
 		}
 		return nil
 	}
 
 	if !outfmt.IsJSON(ctx) {
-		warnTasksDueTime(u, due)
+		warnTasksDueTime(u, plan.Due)
 	}
 
-	dueTime, dueHasTime, err := parseTaskDate(due)
+	schedule, err := plan.repeatSchedule()
 	if err != nil {
 		return err
 	}
 
-	var until *time.Time
-	if repeatConfig.Until != "" {
-		untilValue, untilHasTime, parseErr := parseTaskDate(repeatConfig.Until)
-		if parseErr != nil {
-			return parseErr
-		}
-		switch {
-		case dueHasTime && !untilHasTime:
-			untilValue = time.Date(
-				untilValue.Year(),
-				untilValue.Month(),
-				untilValue.Day(),
-				dueTime.Hour(),
-				dueTime.Minute(),
-				dueTime.Second(),
-				dueTime.Nanosecond(),
-				dueTime.Location(),
-			)
-		case !dueHasTime && untilHasTime:
-			untilValue = time.Date(untilValue.Year(), untilValue.Month(), untilValue.Day(), 0, 0, 0, 0, time.UTC)
-		}
-		until = &untilValue
-	}
-
-	schedule := expandRepeatSchedule(dueTime, repeatConfig.Unit, repeatConfig.Interval, c.RepeatCount, until)
-	if len(schedule) == 0 {
-		return usage("repeat produced no occurrences")
-	}
-
-	svc, svcErr := newTasksService(ctx, account)
+	svc, svcErr := tasksService(ctx, account)
 	if svcErr != nil {
 		return svcErr
 	}
-	tasklistID, err = resolveTasklistID(ctx, svc, tasklistID)
+	plan.TasklistID, err = resolveTasklistID(ctx, svc, plan.TasklistID)
 	if err != nil {
 		return err
 	}
 
-	baseTitle := title
 	createdTasks := make([]*tasks.Task, 0, len(schedule))
 
 	for i, due := range schedule {
-		title := baseTitle
+		title := plan.Title
 		if len(schedule) > 1 {
-			title = fmt.Sprintf("%s (#%d/%d)", baseTitle, i+1, len(schedule))
+			title = fmt.Sprintf("%s (#%d/%d)", plan.Title, i+1, len(schedule))
 		}
 		task := &tasks.Task{
 			Title: title,
-			Notes: notes,
-			Due:   formatTaskDue(due, dueHasTime),
+			Notes: plan.Notes,
+			Due:   formatTaskDue(due, plan.Date.DueHasTime),
 		}
-		call := svc.Tasks.Insert(tasklistID, task)
-		if parent != "" {
-			call = call.Parent(parent)
+		call := svc.Tasks.Insert(plan.TasklistID, task)
+		if plan.Parent != "" {
+			call = call.Parent(plan.Parent)
 		}
-		if previous != "" {
-			call = call.Previous(previous)
+		if plan.Previous != "" {
+			call = call.Previous(plan.Previous)
 		}
 		created, createErr := call.Do()
 		if createErr != nil {
 			return createErr
 		}
 		createdTasks = append(createdTasks, created)
-		if previous != "" {
-			previous = created.Id
+		if plan.Previous != "" {
+			plan.Previous = created.Id
 		}
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"tasks": createdTasks,
 			"count": len(createdTasks),
 		})
 	}
 	if len(createdTasks) == 1 {
 		created := createdTasks[0]
-		u.Out().Printf("id\t%s", created.Id)
-		u.Out().Printf("title\t%s", created.Title)
+		u.Out().Linef("id\t%s", created.Id)
+		u.Out().Linef("title\t%s", created.Title)
 		if strings.TrimSpace(created.Status) != "" {
-			u.Out().Printf("status\t%s", created.Status)
+			u.Out().Linef("status\t%s", created.Status)
 		}
 		if strings.TrimSpace(created.Due) != "" {
-			u.Out().Printf("due\t%s", created.Due)
+			u.Out().Linef("due\t%s", created.Due)
 		}
 		if strings.TrimSpace(created.WebViewLink) != "" {
-			u.Out().Printf("link\t%s", created.WebViewLink)
+			u.Out().Linef("link\t%s", created.WebViewLink)
 		}
 		return nil
 	}
@@ -471,53 +354,22 @@ type TasksUpdateCmd struct {
 
 func (c *TasksUpdateCmd) Run(ctx context.Context, kctx *kong.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	tasklistID := strings.TrimSpace(c.TasklistID)
-	taskID := strings.TrimSpace(c.TaskID)
-	if tasklistID == "" {
-		return usage("empty tasklistId")
+	plan, err := newTasksUpdatePlan(tasksUpdateInput{
+		TasklistID: c.TasklistID,
+		TaskID:     c.TaskID,
+		Title:      c.Title,
+		Notes:      c.Notes,
+		Due:        c.Due,
+		Status:     c.Status,
+	}, tasksUpdateFieldsFromContext(kctx))
+	if err != nil {
+		return err
 	}
-	if taskID == "" {
-		return usage("empty taskId")
-	}
-
-	patch := &tasks.Task{}
-	changed := false
-	if flagProvided(kctx, "title") {
-		patch.Title = strings.TrimSpace(c.Title)
-		changed = true
-	}
-	if flagProvided(kctx, "notes") {
-		patch.Notes = strings.TrimSpace(c.Notes)
-		changed = true
-	}
-	if flagProvided(kctx, "due") {
-		if !outfmt.IsJSON(ctx) {
-			warnTasksDueTime(u, c.Due)
-		}
-		dueValue, dueErr := normalizeTaskDue(c.Due)
-		if dueErr != nil {
-			return dueErr
-		}
-		patch.Due = dueValue
-		changed = true
-	}
-	if flagProvided(kctx, "status") {
-		patch.Status = strings.TrimSpace(c.Status)
-		changed = true
-	}
-	if !changed {
-		return usage("no fields to update (set at least one of: --title, --notes, --due, --status)")
+	if plan.WarnDue != "" && !outfmt.IsJSON(ctx) {
+		warnTasksDueTime(u, plan.WarnDue)
 	}
 
-	if flagProvided(kctx, "status") && patch.Status != "" && patch.Status != taskStatusNeedsAction && patch.Status != taskStatusCompleted {
-		return usage("invalid --status (expected needsAction or completed)")
-	}
-
-	if dryRunErr := dryRunExit(ctx, flags, "tasks.update", map[string]any{
-		"tasklist_id": tasklistID,
-		"task_id":     taskID,
-		"patch":       patch,
-	}); dryRunErr != nil {
+	if dryRunErr := dryRunExit(ctx, flags, "tasks.update", plan.dryRunPayload()); dryRunErr != nil {
 		return dryRunErr
 	}
 
@@ -526,33 +378,33 @@ func (c *TasksUpdateCmd) Run(ctx context.Context, kctx *kong.Context, flags *Roo
 		return err
 	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}
-	tasklistID, err = resolveTasklistID(ctx, svc, tasklistID)
+	plan.TasklistID, err = resolveTasklistID(ctx, svc, plan.TasklistID)
 	if err != nil {
 		return err
 	}
 
-	updated, err := svc.Tasks.Patch(tasklistID, taskID, patch).Do()
+	updated, err := svc.Tasks.Patch(plan.TasklistID, plan.TaskID, plan.Patch).Do()
 	if err != nil {
 		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"task": updated})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"task": updated})
 	}
-	u.Out().Printf("id\t%s", updated.Id)
-	u.Out().Printf("title\t%s", updated.Title)
+	u.Out().Linef("id\t%s", updated.Id)
+	u.Out().Linef("title\t%s", updated.Title)
 	if strings.TrimSpace(updated.Status) != "" {
-		u.Out().Printf("status\t%s", updated.Status)
+		u.Out().Linef("status\t%s", updated.Status)
 	}
 	if strings.TrimSpace(updated.Due) != "" {
-		u.Out().Printf("due\t%s", updated.Due)
+		u.Out().Linef("due\t%s", updated.Due)
 	}
 	if strings.TrimSpace(updated.WebViewLink) != "" {
-		u.Out().Printf("link\t%s", updated.WebViewLink)
+		u.Out().Linef("link\t%s", updated.WebViewLink)
 	}
 	return nil
 }
@@ -585,7 +437,7 @@ func (c *TasksDoneCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -599,10 +451,10 @@ func (c *TasksDoneCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"task": updated})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"task": updated})
 	}
-	u.Out().Printf("id\t%s", updated.Id)
-	u.Out().Printf("status\t%s", strings.TrimSpace(updated.Status))
+	u.Out().Linef("id\t%s", updated.Id)
+	u.Out().Linef("status\t%s", strings.TrimSpace(updated.Status))
 	return nil
 }
 
@@ -634,7 +486,7 @@ func (c *TasksUndoCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -648,10 +500,10 @@ func (c *TasksUndoCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"task": updated})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"task": updated})
 	}
-	u.Out().Printf("id\t%s", updated.Id)
-	u.Out().Printf("status\t%s", strings.TrimSpace(updated.Status))
+	u.Out().Linef("id\t%s", updated.Id)
+	u.Out().Linef("status\t%s", strings.TrimSpace(updated.Status))
 	return nil
 }
 
@@ -671,7 +523,10 @@ func (c *TasksDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty taskId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete task %s from list %s", taskID, tasklistID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "tasks.delete", map[string]any{
+		"tasklist_id": tasklistID,
+		"task_id":     taskID,
+	}, fmt.Sprintf("delete task %s from list %s", taskID, tasklistID)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -680,7 +535,7 @@ func (c *TasksDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -709,7 +564,9 @@ func (c *TasksClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty tasklistId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("clear completed tasks from list %s", tasklistID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "tasks.clear", map[string]any{
+		"tasklist_id": tasklistID,
+	}, fmt.Sprintf("clear completed tasks from list %s", tasklistID)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -718,7 +575,7 @@ func (c *TasksClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newTasksService(ctx, account)
+	svc, err := tasksService(ctx, account)
 	if err != nil {
 		return err
 	}

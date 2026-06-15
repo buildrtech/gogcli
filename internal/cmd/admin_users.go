@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"strings"
+	"time"
 
 	admin "google.golang.org/api/admin/directory/v1"
+	ggoogleapi "google.golang.org/api/googleapi"
 
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
@@ -17,6 +19,7 @@ type AdminUsersCmd struct {
 	List    AdminUsersListCmd    `cmd:"" name:"list" aliases:"ls" help:"List users in a domain"`
 	Get     AdminUsersGetCmd     `cmd:"" name:"get" aliases:"info,show" help:"Get user details"`
 	Create  AdminUsersCreateCmd  `cmd:"" name:"create" aliases:"add,new" help:"Create a new user"`
+	Delete  AdminUsersDeleteCmd  `cmd:"" name:"delete" aliases:"rm,del,remove" help:"Delete a user account"`
 	Suspend AdminUsersSuspendCmd `cmd:"" name:"suspend" help:"Suspend a user account"`
 }
 
@@ -30,17 +33,19 @@ type AdminUsersListCmd struct {
 
 func (c *AdminUsersListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	domain := strings.TrimSpace(c.Domain)
+	if domain == "" {
+		return usage("domain required (e.g., --domain example.com)")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	account, err := requireAdminAccount(flags)
 	if err != nil {
 		return err
 	}
 
-	domain := strings.TrimSpace(c.Domain)
-	if domain == "" {
-		return usage("domain required (e.g., --domain example.com)")
-	}
-
-	svc, err := newAdminDirectoryService(ctx, account)
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -60,19 +65,9 @@ func (c *AdminUsersListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return resp.Users, resp.NextPageToken, nil
 	}
 
-	var users []*admin.User
-	nextPageToken := ""
-	if c.All {
-		all, collectErr := collectAllPages(c.Page, fetch)
-		if collectErr != nil {
-			return collectErr
-		}
-		users = all
-	} else {
-		users, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	users, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
@@ -98,7 +93,7 @@ func (c *AdminUsersListCmd) Run(ctx context.Context, flags *RootFlags) error {
 				Admin:     user.IsAdmin,
 			})
 		}
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"users":         items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -115,33 +110,10 @@ func (c *AdminUsersListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "EMAIL\tNAME\tSUSPENDED\tADMIN")
-	for _, user := range users {
-		if user == nil {
-			continue
-		}
-		suspended := "no"
-		if user.Suspended {
-			suspended = "yes"
-		}
-		isAdmin := "no"
-		if user.IsAdmin {
-			isAdmin = "yes"
-		}
-		name := ""
-		if user.Name != nil {
-			name = user.Name.FullName
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			sanitizeTab(user.PrimaryEmail),
-			sanitizeTab(name),
-			suspended,
-			isAdmin,
-		)
+	if err := outfmt.WriteTable(ctx, stdoutWriter(ctx), nonNilAdminRows(users), adminUserColumns()); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -160,7 +132,7 @@ func (c *AdminUsersGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("user email required")
 	}
 
-	svc, err := newAdminDirectoryService(ctx, account)
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -195,7 +167,7 @@ func (c *AdminUsersGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 			givenName = user.Name.GivenName
 			familyName = user.Name.FamilyName
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, item{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), item{
 			Email:       user.PrimaryEmail,
 			Name:        name,
 			GivenName:   givenName,
@@ -229,77 +201,158 @@ func (c *AdminUsersGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 }
 
 type AdminUsersCreateCmd struct {
-	Email      string `arg:"" name:"email" help:"User email (e.g., user@example.com)"`
-	GivenName  string `name:"given" help:"Given (first) name"`
-	FamilyName string `name:"family" help:"Family (last) name"`
-	Password   string `name:"password" help:"Initial password"` //nolint:gosec // CLI input for initial admin-provisioned passwords.
-	ChangePwd  bool   `name:"change-password" help:"Require password change on first login"`
-	OrgUnit    string `name:"org-unit" help:"Organization unit path"`
-	Admin      bool   `name:"admin" help:"Not supported; assign admin roles separately after user creation"`
+	Email         string `arg:"" name:"email" help:"User email (e.g., user@example.com)"`
+	GivenName     string `name:"given" aliases:"first-name,given-name,fn" help:"Given (first) name"`
+	FamilyName    string `name:"family" aliases:"last-name,family-name,ln" help:"Family (last) name"`
+	Password      string `name:"password" aliases:"pass" help:"Initial password (generated if omitted)"`
+	ChangePwd     bool   `name:"change-password" help:"Require password change on first login"`
+	OrgUnit       string `name:"org-unit" aliases:"ou" help:"Organization unit path"`
+	Suspended     bool   `name:"suspended" help:"Create user in suspended state"`
+	Archived      bool   `name:"archived" help:"Create user in archived state"`
+	RecoveryEmail string `name:"recovery-email" help:"Recovery email address"`
+	RecoveryPhone string `name:"recovery-phone" help:"Recovery phone number in E.164 format"`
+	HashFunction  string `name:"hash-function" help:"Password hash function when --password is pre-hashed (MD5, SHA-1, crypt)"`
+	Admin         bool   `name:"admin" help:"Not supported; assign admin roles separately after user creation"`
 }
 
 func (c *AdminUsersCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
+	plan, err := newAdminUserCreatePlan(adminUserCreateInput{
+		Email:         c.Email,
+		GivenName:     c.GivenName,
+		FamilyName:    c.FamilyName,
+		Password:      c.Password,
+		ChangePwd:     c.ChangePwd,
+		OrgUnit:       c.OrgUnit,
+		Suspended:     c.Suspended,
+		Archived:      c.Archived,
+		RecoveryEmail: c.RecoveryEmail,
+		RecoveryPhone: c.RecoveryPhone,
+		HashFunction:  c.HashFunction,
+		Admin:         c.Admin,
+	})
+	if err != nil {
+		return err
+	}
+	if dryRunErr := dryRunExit(ctx, flags, "admin.users.create", plan.dryRunPayload()); dryRunErr != nil {
+		return dryRunErr
+	}
+
 	account, err := requireAdminAccount(flags)
 	if err != nil {
 		return err
 	}
 
-	email := strings.TrimSpace(c.Email)
-	givenName := strings.TrimSpace(c.GivenName)
-	familyName := strings.TrimSpace(c.FamilyName)
-	password := strings.TrimSpace(c.Password)
-	if email == "" {
-		return usage("email required")
-	}
-	if givenName == "" {
-		return usage("--given required")
-	}
-	if familyName == "" {
-		return usage("--family required")
-	}
-	if password == "" {
-		return usage("--password required")
-	}
-	if c.Admin {
-		return usage("--admin is not supported; assign admin roles separately after user creation")
+	password := plan.Password
+	if plan.GeneratePassword {
+		password, err = generateAdminUserPassword(16)
+		if err != nil {
+			return fmt.Errorf("generate password: %w", err)
+		}
 	}
 
-	user := &admin.User{
-		PrimaryEmail: email,
-		Name: &admin.UserName{
-			GivenName:  givenName,
-			FamilyName: familyName,
-		},
-		Password:                  password,
-		ChangePasswordAtNextLogin: c.ChangePwd,
-	}
-	if c.OrgUnit != "" {
-		user.OrgUnitPath = c.OrgUnit
-	}
-
-	if dryRunErr := dryRunExit(ctx, flags, "create user", user); dryRunErr != nil {
-		return dryRunErr
-	}
-
-	svc, err := newAdminDirectoryService(ctx, account)
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
 
-	created, err := svc.Users.Insert(user).Context(ctx).Do()
+	created, err := svc.Users.Insert(plan.insertRequest(password)).Context(ctx).Do()
 	if err != nil {
+		return wrapAdminDirectoryError(err, account)
+	}
+	if plan.StatePatch != nil {
+		userKey := created.PrimaryEmail
+		if strings.TrimSpace(userKey) == "" {
+			userKey = plan.Email
+		}
+		updated, patchErr := patchAdminUserState(ctx, svc, userKey, plan.StatePatch)
+		if patchErr != nil {
+			return wrapAdminDirectoryError(patchErr, account)
+		}
+		created = updated
+	}
+
+	if outfmt.IsJSON(ctx) {
+		result := map[string]any{
+			"email":     created.PrimaryEmail,
+			"id":        created.Id,
+			"suspended": created.Suspended,
+			"archived":  created.Archived,
+		}
+		if plan.GeneratePassword {
+			result["generatedPassword"] = password
+		}
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), result)
+	}
+
+	u := ui.FromContext(ctx)
+	u.Out().Linef("Created user: %s (ID: %s)", created.PrimaryEmail, created.Id)
+	if plan.GeneratePassword {
+		u.Out().Linef("Generated password: %s", password)
+	}
+	return nil
+}
+
+func patchAdminUserState(ctx context.Context, svc *admin.Service, userKey string, patch *admin.User) (*admin.User, error) {
+	const attempts = 6
+	var lastErr error
+	for attempt := range attempts {
+		updated, err := svc.Users.Patch(userKey, patch).Context(ctx).Do()
+		if err == nil {
+			return updated, nil
+		}
+		lastErr = err
+		var googleErr *ggoogleapi.Error
+		if !errors.As(err, &googleErr) || googleErr.Code != 404 || attempt == attempts-1 {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return nil, lastErr
+}
+
+type AdminUsersDeleteCmd struct {
+	UserEmail string `arg:"" name:"userEmail" help:"User email to delete"`
+}
+
+func (c *AdminUsersDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
+	userEmail := strings.TrimSpace(c.UserEmail)
+	if userEmail == "" {
+		return usage("user email required")
+	}
+
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "admin.users.delete", map[string]any{
+		"email": userEmail,
+	}, fmt.Sprintf("delete user %s", userEmail)); confirmErr != nil {
+		return confirmErr
+	}
+
+	account, err := requireAdminAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := adminDirectoryService(ctx, account)
+	if err != nil {
+		return wrapAdminDirectoryError(err, account)
+	}
+
+	if err := svc.Users.Delete(userEmail).Context(ctx).Do(); err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
-			"email": created.PrimaryEmail,
-			"id":    created.Id,
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
+			"email":   userEmail,
+			"deleted": true,
 		})
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("Created user: %s (ID: %s)", created.PrimaryEmail, created.Id)
+	u.Out().Linef("Deleted user: %s", userEmail)
 	return nil
 }
 
@@ -308,21 +361,24 @@ type AdminUsersSuspendCmd struct {
 }
 
 func (c *AdminUsersSuspendCmd) Run(ctx context.Context, flags *RootFlags) error {
-	account, err := requireAdminAccount(flags)
-	if err != nil {
-		return err
-	}
-
 	userEmail := strings.TrimSpace(c.UserEmail)
 	if userEmail == "" {
 		return usage("user email required")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("suspend user %s", userEmail)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "admin.users.suspend", map[string]any{
+		"email":     userEmail,
+		"suspended": true,
+	}, fmt.Sprintf("suspend user %s", userEmail)); confirmErr != nil {
 		return confirmErr
 	}
 
-	svc, err := newAdminDirectoryService(ctx, account)
+	account, err := requireAdminAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := adminDirectoryService(ctx, account)
 	if err != nil {
 		return wrapAdminDirectoryError(err, account)
 	}
@@ -333,13 +389,13 @@ func (c *AdminUsersSuspendCmd) Run(ctx context.Context, flags *RootFlags) error 
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"email":     updated.PrimaryEmail,
 			"suspended": updated.Suspended,
 		})
 	}
 
 	u := ui.FromContext(ctx)
-	u.Out().Printf("Suspended user: %s", updated.PrimaryEmail)
+	u.Out().Linef("Suspended user: %s", updated.PrimaryEmail)
 	return nil
 }

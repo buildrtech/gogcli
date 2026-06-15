@@ -2,20 +2,26 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/sheets/v4"
 
-	"github.com/steipete/gogcli/internal/googleapi"
 	"github.com/steipete/gogcli/internal/outfmt"
+	"github.com/steipete/gogcli/internal/sheetsvalues"
 	"github.com/steipete/gogcli/internal/ui"
 )
 
-var newSheetsService = googleapi.NewSheets
+const (
+	sheetsDefaultValueInputOption = "USER_ENTERED"
+	sheetsConditionOneOfList      = "ONE_OF_LIST"
+	sheetsTypeDropdown            = "DROPDOWN"
+	sheetsTypeText                = "TEXT"
+	sheetsDimensionRows           = "ROWS"
+	sheetsDimensionColumns        = "COLUMNS"
+)
 
 // cleanRange removes shell escape sequences from range arguments.
 // Some shells escape ! to \! (bash history expansion), which breaks Google Sheets API calls.
@@ -24,31 +30,41 @@ func cleanRange(r string) string {
 }
 
 type SheetsCmd struct {
-	Get           SheetsGetCmd           `cmd:"" name:"get" aliases:"read,show" help:"Get values from a range"`
-	Update        SheetsUpdateCmd        `cmd:"" name:"update" aliases:"edit,set" help:"Update values in a range"`
-	Append        SheetsAppendCmd        `cmd:"" name:"append" aliases:"add" help:"Append values to a range"`
-	Insert        SheetsInsertCmd        `cmd:"" name:"insert" help:"Insert empty rows or columns into a sheet"`
-	Clear         SheetsClearCmd         `cmd:"" name:"clear" help:"Clear values in a range"`
-	Format        SheetsFormatCmd        `cmd:"" name:"format" help:"Apply cell formatting to a range"`
-	Merge         SheetsMergeCmd         `cmd:"" name:"merge" help:"Merge cells in a range"`
-	Unmerge       SheetsUnmergeCmd       `cmd:"" name:"unmerge" help:"Unmerge cells in a range"`
-	NumberFormat  SheetsNumberFormatCmd  `cmd:"" name:"number-format" help:"Apply number format to a range"`
-	Freeze        SheetsFreezeCmd        `cmd:"" name:"freeze" help:"Freeze rows and columns on a sheet"`
-	ResizeColumns SheetsResizeColumnsCmd `cmd:"" name:"resize-columns" help:"Resize sheet columns"`
-	ResizeRows    SheetsResizeRowsCmd    `cmd:"" name:"resize-rows" help:"Resize sheet rows"`
-	ReadFormat    SheetsReadFormatCmd    `cmd:"" name:"read-format" aliases:"get-format,format-read" help:"Read cell formatting from a range"`
-	Notes         SheetsNotesCmd         `cmd:"" name:"notes" help:"Get cell notes from a range"`
-	UpdateNote    SheetsUpdateNoteCmd    `cmd:"" name:"update-note" aliases:"set-note" help:"Set or clear a cell note"`
-	FindReplace   SheetsFindReplaceCmd   `cmd:"" name:"find-replace" help:"Find and replace text across a spreadsheet"`
-	Links         SheetsLinksCmd         `cmd:"" name:"links" aliases:"hyperlinks" help:"Get cell hyperlinks from a range"`
-	Named         SheetsNamedRangesCmd   `cmd:"" name:"named-ranges" aliases:"namedranges,nr" help:"Manage named ranges"`
-	Metadata      SheetsMetadataCmd      `cmd:"" name:"metadata" aliases:"info" help:"Get spreadsheet metadata"`
-	Create        SheetsCreateCmd        `cmd:"" name:"create" aliases:"new" help:"Create a new spreadsheet"`
-	Copy          SheetsCopyCmd          `cmd:"" name:"copy" aliases:"cp,duplicate" help:"Copy a Google Sheet"`
-	Export        SheetsExportCmd        `cmd:"" name:"export" aliases:"download,dl" help:"Export a Google Sheet (pdf|xlsx|csv) via Drive"`
-	AddTab        SheetsAddTabCmd        `cmd:"" name:"add-tab" help:"Add a new tab/sheet to a spreadsheet"`
-	RenameTab     SheetsRenameTabCmd     `cmd:"" name:"rename-tab" help:"Rename a tab/sheet in a spreadsheet"`
-	DeleteTab     SheetsDeleteTabCmd     `cmd:"" name:"delete-tab" help:"Delete a tab/sheet from a spreadsheet (use --force to skip confirmation)"`
+	Get           SheetsGetCmd             `cmd:"" name:"get" aliases:"read,show" help:"Get values from a range"`
+	Update        SheetsUpdateCmd          `cmd:"" name:"update" aliases:"edit,set" help:"Update values in a range"`
+	BatchUpdate   SheetsBatchUpdateCmd     `cmd:"" name:"batch-update" aliases:"batch" help:"Update values in multiple ranges with one API request"`
+	Append        SheetsAppendCmd          `cmd:"" name:"append" aliases:"add" help:"Append values to a range"`
+	Insert        SheetsInsertCmd          `cmd:"" name:"insert" help:"Insert empty rows or columns into a sheet"`
+	DeleteDim     SheetsDeleteDimensionCmd `cmd:"" name:"delete-dimension" aliases:"delete-dim" help:"Delete rows or columns while preserving intersecting tables"`
+	Clear         SheetsClearCmd           `cmd:"" name:"clear" help:"Clear values in a range"`
+	Format        SheetsFormatCmd          `cmd:"" name:"format" help:"Apply cell formatting to a range"`
+	Conditional   SheetsConditionalCmd     `cmd:"" name:"conditional-format" aliases:"cf,conditional-formats" help:"Manage conditional formatting rules"`
+	Validation    SheetsValidationCmd      `cmd:"" name:"validation" aliases:"data-validation,validations" help:"Manage cell data validation rules"`
+	Banding       SheetsBandingCmd         `cmd:"" name:"banding" aliases:"banded-ranges" help:"Manage alternating color banding"`
+	Merge         SheetsMergeCmd           `cmd:"" name:"merge" help:"Merge cells in a range"`
+	Unmerge       SheetsUnmergeCmd         `cmd:"" name:"unmerge" help:"Unmerge cells in a range"`
+	CopyPaste     SheetsCopyPasteCmd       `cmd:"" name:"copy-paste" aliases:"fill,copy-range" help:"Copy a range's values/formulas/format to another range (tiles to fill down/across)"`
+	NumberFormat  SheetsNumberFormatCmd    `cmd:"" name:"number-format" help:"Apply number format to a range"`
+	Freeze        SheetsFreezeCmd          `cmd:"" name:"freeze" help:"Freeze rows and columns on a sheet"`
+	ResizeColumns SheetsResizeColumnsCmd   `cmd:"" name:"resize-columns" help:"Resize sheet columns"`
+	ResizeRows    SheetsResizeRowsCmd      `cmd:"" name:"resize-rows" help:"Resize sheet rows"`
+	ReadFormat    SheetsReadFormatCmd      `cmd:"" name:"read-format" aliases:"get-format,format-read" help:"Read cell formatting from a range"`
+	Notes         SheetsNotesCmd           `cmd:"" name:"notes" help:"Get cell notes from a range"`
+	UpdateNote    SheetsUpdateNoteCmd      `cmd:"" name:"update-note" aliases:"set-note" help:"Set or clear a cell note"`
+	FindReplace   SheetsFindReplaceCmd     `cmd:"" name:"find-replace" help:"Find and replace text across a spreadsheet"`
+	Links         SheetsLinksCmd           `cmd:"" name:"links" aliases:"hyperlinks" help:"Get or set cell hyperlinks"`
+	Named         SheetsNamedRangesCmd     `cmd:"" name:"named-ranges" aliases:"namedranges,nr" help:"Manage named ranges"`
+	Table         SheetsTableCmd           `cmd:"" name:"table" aliases:"tables" help:"Manage Google Sheets tables"`
+	Metadata      SheetsMetadataCmd        `cmd:"" name:"metadata" aliases:"info" help:"Get spreadsheet metadata"`
+	Raw           SheetsRawCmd             `cmd:"" name:"raw" help:"Dump raw Google Sheets API response as JSON (Spreadsheets.Get; lossless; for scripting and LLM consumption)"`
+	Create        SheetsCreateCmd          `cmd:"" name:"create" aliases:"new" help:"Create a new spreadsheet"`
+	Copy          SheetsCopyCmd            `cmd:"" name:"copy" aliases:"cp,duplicate" help:"Copy a Google Sheet"`
+	Export        SheetsExportCmd          `cmd:"" name:"export" aliases:"download,dl" help:"Export a Google Sheet (pdf|xlsx|csv) via Drive"`
+	Chart         SheetsChartCmd           `cmd:"" name:"chart" aliases:"charts" help:"Manage spreadsheet charts"`
+	AddTab        SheetsAddTabCmd          `cmd:"" name:"add-tab" aliases:"add-sheet" help:"Add a new tab/sheet to a spreadsheet"`
+	RenameTab     SheetsRenameTabCmd       `cmd:"" name:"rename-tab" aliases:"rename-sheet" help:"Rename a tab/sheet in a spreadsheet"`
+	DeleteTab     SheetsDeleteTabCmd       `cmd:"" name:"delete-tab" aliases:"delete-sheet" help:"Delete a tab/sheet from a spreadsheet (use --force to skip confirmation)"`
+	ReorderTab    SheetsReorderTabCmd      `cmd:"" name:"reorder-tab" aliases:"move-tab,reorder-sheet,move-sheet" help:"Move a tab/sheet to a specific 0-based position in the spreadsheet"`
 }
 
 type SheetsExportCmd struct {
@@ -76,6 +92,7 @@ type SheetsCopyCmd struct {
 
 func (c *SheetsCopyCmd) Run(ctx context.Context, flags *RootFlags) error {
 	return copyViaDrive(ctx, flags, copyViaDriveOptions{
+		Op:           "sheets.copy",
 		ArgName:      "spreadsheetId",
 		ExpectedMime: "application/vnd.google-apps.spreadsheet",
 		KindLabel:    "Google Sheet",
@@ -105,7 +122,7 @@ func (c *SheetsGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty range")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -124,9 +141,13 @@ func (c *SheetsGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		values := resp.Values
+		if values == nil {
+			values = [][]interface{}{}
+		}
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"range":  resp.Range,
-			"values": resp.Values,
+			"values": values,
 		})
 	}
 
@@ -172,32 +193,24 @@ func (c *SheetsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	switch {
 	case strings.TrimSpace(c.ValuesJSON) != "":
-		b, err := resolveInlineOrFileBytes(c.ValuesJSON)
+		b, err := resolveInlineOrFileBytes(c.ValuesJSON, stdinReader(ctx))
 		if err != nil {
-			return fmt.Errorf("read --values-json: %w", err)
+			return usagef("read --values-json: %v", err)
 		}
-		if unmarshalErr := json.Unmarshal(b, &values); unmarshalErr != nil {
-			return fmt.Errorf("invalid JSON values: %w", unmarshalErr)
+
+		values, err = sheetsvalues.DecodeStrict(b)
+		if err != nil {
+			return sheetsValuesPlannerError(err)
 		}
 	case len(c.Values) > 0:
-		// Parse comma-separated rows, pipe-separated cells
-		rawValues := strings.Join(c.Values, " ")
-		rows := strings.Split(rawValues, ",")
-		for _, row := range rows {
-			cells := strings.Split(strings.TrimSpace(row), "|")
-			rowData := make([]interface{}, len(cells))
-			for i, cell := range cells {
-				rowData[i] = strings.TrimSpace(cell)
-			}
-			values = append(values, rowData)
-		}
+		values = sheetsvalues.ParseArgs(c.Values)
 	default:
-		return fmt.Errorf("provide values as args or via --values-json")
+		return usage("provide values as args or via --values-json")
 	}
 
 	valueInputOption := strings.TrimSpace(c.ValueInput)
 	if valueInputOption == "" {
-		valueInputOption = "USER_ENTERED"
+		valueInputOption = sheetsDefaultValueInputOption
 	}
 
 	if err := dryRunExit(ctx, flags, "sheets.update", map[string]any{
@@ -216,7 +229,7 @@ func (c *SheetsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -243,7 +256,7 @@ func (c *SheetsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"updatedRange":   resp.UpdatedRange,
 			"updatedRows":    resp.UpdatedRows,
 			"updatedColumns": resp.UpdatedColumns,
@@ -251,8 +264,104 @@ func (c *SheetsUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		})
 	}
 
-	u.Out().Printf("Updated %d cells in %s", resp.UpdatedCells, resp.UpdatedRange)
+	u.Out().Linef("Updated %d cells in %s", resp.UpdatedCells, resp.UpdatedRange)
 	return nil
+}
+
+type SheetsBatchUpdateCmd struct {
+	SpreadsheetID                string `arg:"" name:"spreadsheetId" help:"Spreadsheet ID"`
+	DataJSON                     string `name:"data-json" required:"" help:"Value ranges as JSON array, or @file (e.g. [{\"range\":\"Sheet1!A1:B2\",\"values\":[[\"a\",\"b\"]]}])"`
+	ValueInput                   string `name:"input" help:"Value input option: RAW or USER_ENTERED" default:"USER_ENTERED"`
+	IncludeValuesInResponse      bool   `name:"include-values-in-response" help:"Include updated values in the response"`
+	ResponseValueRenderOption    string `name:"response-render" help:"Response value render option: FORMATTED_VALUE, UNFORMATTED_VALUE, or FORMULA"`
+	ResponseDateTimeRenderOption string `name:"response-date-time-render" help:"Response date/time render option: SERIAL_NUMBER or FORMATTED_STRING"`
+}
+
+func (c *SheetsBatchUpdateCmd) Run(ctx context.Context, flags *RootFlags) error {
+	u := ui.FromContext(ctx)
+
+	spreadsheetID := normalizeGoogleID(strings.TrimSpace(c.SpreadsheetID))
+	if spreadsheetID == "" {
+		return usage("empty spreadsheetId")
+	}
+
+	data, err := parseSheetsBatchUpdateData(c.DataJSON, stdinReader(ctx))
+	if err != nil {
+		return err
+	}
+
+	valueInputOption := strings.TrimSpace(c.ValueInput)
+	if valueInputOption == "" {
+		valueInputOption = sheetsDefaultValueInputOption
+	}
+	req := &sheets.BatchUpdateValuesRequest{
+		Data:                    data,
+		ValueInputOption:        valueInputOption,
+		IncludeValuesInResponse: c.IncludeValuesInResponse,
+	}
+	if strings.TrimSpace(c.ResponseValueRenderOption) != "" {
+		req.ResponseValueRenderOption = strings.TrimSpace(c.ResponseValueRenderOption)
+	}
+	if strings.TrimSpace(c.ResponseDateTimeRenderOption) != "" {
+		req.ResponseDateTimeRenderOption = strings.TrimSpace(c.ResponseDateTimeRenderOption)
+	}
+
+	if dryRunErr := dryRunExit(ctx, flags, "sheets.batch-update", map[string]any{
+		"spreadsheet_id":                   spreadsheetID,
+		"value_input_option":               req.ValueInputOption,
+		"include_values_in_response":       req.IncludeValuesInResponse,
+		"response_value_render_option":     req.ResponseValueRenderOption,
+		"response_date_time_render_option": req.ResponseDateTimeRenderOption,
+		"data":                             req.Data,
+	}); dryRunErr != nil {
+		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := sheetsService(ctx, account)
+	if err != nil {
+		return err
+	}
+
+	resp, err := svc.Spreadsheets.Values.BatchUpdate(spreadsheetID, req).Do()
+	if err != nil {
+		return err
+	}
+
+	if outfmt.IsJSON(ctx) {
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
+			"spreadsheetId":       resp.SpreadsheetId,
+			"totalUpdatedRows":    resp.TotalUpdatedRows,
+			"totalUpdatedColumns": resp.TotalUpdatedColumns,
+			"totalUpdatedCells":   resp.TotalUpdatedCells,
+			"totalUpdatedSheets":  resp.TotalUpdatedSheets,
+			"responses":           resp.Responses,
+		})
+	}
+
+	u.Out().Linef("Updated %d cells across %d ranges in %s", resp.TotalUpdatedCells, len(resp.Responses), spreadsheetID)
+	return nil
+}
+
+func parseSheetsBatchUpdateData(dataJSON string, input io.Reader) ([]*sheets.ValueRange, error) {
+	if strings.TrimSpace(dataJSON) == "" {
+		return nil, usage("empty data-json")
+	}
+	b, err := resolveInlineOrFileBytes(dataJSON, input)
+	if err != nil {
+		return nil, usagef("read --data-json: %v", err)
+	}
+
+	data, err := sheetsvalues.DecodeRanges(b)
+	if err != nil {
+		return nil, sheetsValuesPlannerError(err)
+	}
+
+	return data, nil
 }
 
 type SheetsAppendCmd struct {
@@ -281,31 +390,24 @@ func (c *SheetsAppendCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	switch {
 	case strings.TrimSpace(c.ValuesJSON) != "":
-		b, err := resolveInlineOrFileBytes(c.ValuesJSON)
+		b, err := resolveInlineOrFileBytes(c.ValuesJSON, stdinReader(ctx))
 		if err != nil {
-			return fmt.Errorf("read --values-json: %w", err)
+			return usagef("read --values-json: %v", err)
 		}
-		if unmarshalErr := json.Unmarshal(b, &values); unmarshalErr != nil {
-			return fmt.Errorf("invalid JSON values: %w", unmarshalErr)
+
+		values, err = sheetsvalues.Decode(b)
+		if err != nil {
+			return sheetsValuesPlannerError(err)
 		}
 	case len(c.Values) > 0:
-		rawValues := strings.Join(c.Values, " ")
-		rows := strings.Split(rawValues, ",")
-		for _, row := range rows {
-			cells := strings.Split(strings.TrimSpace(row), "|")
-			rowData := make([]interface{}, len(cells))
-			for i, cell := range cells {
-				rowData[i] = strings.TrimSpace(cell)
-			}
-			values = append(values, rowData)
-		}
+		values = sheetsvalues.ParseArgs(c.Values)
 	default:
-		return fmt.Errorf("provide values as args or via --values-json")
+		return usage("provide values as args or via --values-json")
 	}
 
 	valueInputOption := strings.TrimSpace(c.ValueInput)
 	if valueInputOption == "" {
-		valueInputOption = "USER_ENTERED"
+		valueInputOption = sheetsDefaultValueInputOption
 	}
 	insertDataOption := strings.TrimSpace(c.Insert)
 
@@ -325,7 +427,7 @@ func (c *SheetsAppendCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -355,7 +457,7 @@ func (c *SheetsAppendCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"updatedRange":   resp.Updates.UpdatedRange,
 			"updatedRows":    resp.Updates.UpdatedRows,
 			"updatedColumns": resp.Updates.UpdatedColumns,
@@ -363,7 +465,7 @@ func (c *SheetsAppendCmd) Run(ctx context.Context, flags *RootFlags) error {
 		})
 	}
 
-	u.Out().Printf("Appended %d cells to %s", resp.Updates.UpdatedCells, resp.Updates.UpdatedRange)
+	u.Out().Linef("Appended %d cells to %s", resp.Updates.UpdatedCells, resp.Updates.UpdatedRange)
 	return nil
 }
 
@@ -395,7 +497,7 @@ func (c *SheetsClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -406,13 +508,60 @@ func (c *SheetsClearCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"clearedRange": resp.ClearedRange,
 		})
 	}
 
-	u.Out().Printf("Cleared %s", resp.ClearedRange)
+	u.Out().Linef("Cleared %s", resp.ClearedRange)
 	return nil
+}
+
+// SheetsRawCmd dumps the full Spreadsheets.Get response as JSON, with no
+// Fields restriction. `--include-grid-data` opts into returning cell-level
+// data; it is off by default because grid payloads can be multi-MB and are
+// the primary leakage vector (formulas may embed API keys or tokens).
+//
+// REST reference: https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/get
+// Go type: https://pkg.go.dev/google.golang.org/api/sheets/v4#Spreadsheet
+type SheetsRawCmd struct {
+	SpreadsheetID   string `arg:"" name:"spreadsheetId" help:"Spreadsheet ID"`
+	IncludeGridData bool   `name:"include-grid-data" help:"Include cell-level grid data in the response (off by default; payloads can be large and may contain secrets in formulas)"`
+	Pretty          bool   `name:"pretty" help:"Pretty-print JSON (default: compact single-line)"`
+}
+
+func (c *SheetsRawCmd) Run(ctx context.Context, flags *RootFlags) error {
+	u := ui.FromContext(ctx)
+	spreadsheetID := normalizeGoogleID(strings.TrimSpace(c.SpreadsheetID))
+	if spreadsheetID == "" {
+		return usage("empty spreadsheetId")
+	}
+
+	_, svc, err := requireSheetsService(ctx, flags)
+	if err != nil {
+		return err
+	}
+
+	call := svc.Spreadsheets.Get(spreadsheetID).Context(ctx)
+	if c.IncludeGridData {
+		call = call.IncludeGridData(true)
+		u.Err().Println("warning: --include-grid-data may expose cell-level formulas that contain API keys or hardcoded secrets")
+	}
+
+	resp, err := call.Do()
+	if err != nil {
+		return err
+	}
+	resp, err = requireRawResponse(resp, "spreadsheet not found")
+	if err != nil {
+		return err
+	}
+
+	if len(resp.DeveloperMetadata) > 0 {
+		u.Err().Println("warning: response contains developerMetadata which may hold third-party app secrets")
+	}
+
+	return writeRawJSON(ctx, resp, c.Pretty)
 }
 
 type SheetsMetadataCmd struct {
@@ -431,7 +580,7 @@ func (c *SheetsMetadataCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty spreadsheetId")
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -442,7 +591,7 @@ func (c *SheetsMetadataCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"spreadsheetId": resp.SpreadsheetId,
 			"title":         resp.Properties.Title,
 			"locale":        resp.Properties.Locale,
@@ -451,27 +600,15 @@ func (c *SheetsMetadataCmd) Run(ctx context.Context, flags *RootFlags) error {
 		})
 	}
 
-	u.Out().Printf("ID\t%s", resp.SpreadsheetId)
-	u.Out().Printf("Title\t%s", resp.Properties.Title)
-	u.Out().Printf("Locale\t%s", resp.Properties.Locale)
-	u.Out().Printf("TimeZone\t%s", resp.Properties.TimeZone)
-	u.Out().Printf("URL\t%s", resp.SpreadsheetUrl)
+	u.Out().Linef("ID\t%s", resp.SpreadsheetId)
+	u.Out().Linef("Title\t%s", resp.Properties.Title)
+	u.Out().Linef("Locale\t%s", resp.Properties.Locale)
+	u.Out().Linef("TimeZone\t%s", resp.Properties.TimeZone)
+	u.Out().Linef("URL\t%s", resp.SpreadsheetUrl)
 	u.Out().Println("")
 	u.Out().Println("Sheets:")
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "ID\tTITLE\tROWS\tCOLS")
-	for _, sheet := range resp.Sheets {
-		props := sheet.Properties
-		fmt.Fprintf(w, "%d\t%s\t%d\t%d\n",
-			props.SheetId,
-			props.Title,
-			props.GridProperties.RowCount,
-			props.GridProperties.ColumnCount,
-		)
-	}
-	return nil
+	return outfmt.WriteTable(ctx, stdoutWriter(ctx), resp.Sheets, sheetsMetadataColumns())
 }
 
 type SheetsCreateCmd struct {
@@ -502,7 +639,7 @@ func (c *SheetsCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -532,7 +669,7 @@ func (c *SheetsCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 	movedToParent := false
 	moveError := ""
 	if parent != "" {
-		parentDriveSvc, driveErr := newDriveService(ctx, account)
+		parentDriveSvc, driveErr := driveService(ctx, account)
 		if driveErr == nil {
 			var meta *drive.File
 			meta, driveErr = parentDriveSvc.Files.Get(resp.SpreadsheetId).
@@ -573,11 +710,11 @@ func (c *SheetsCreateCmd) Run(ctx context.Context, flags *RootFlags) error {
 				payload["moveError"] = moveError
 			}
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, payload)
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), payload)
 	}
 
-	u.Out().Printf("Created spreadsheet: %s", resp.Properties.Title)
-	u.Out().Printf("ID: %s", resp.SpreadsheetId)
-	u.Out().Printf("URL: %s", resp.SpreadsheetUrl)
+	u.Out().Linef("Created spreadsheet: %s", resp.Properties.Title)
+	u.Out().Linef("ID: %s", resp.SpreadsheetId)
+	u.Out().Linef("URL: %s", resp.SpreadsheetUrl)
 	return nil
 }

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/gmail/v1"
@@ -11,12 +10,6 @@ import (
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
 )
-
-var autoReplyMetadataHeaders = []string{
-	"Message-ID", "Message-Id", "References", "In-Reply-To",
-	"From", "Reply-To", "To", "Cc", "Date", "Subject",
-	"Auto-Submitted", "Precedence", "List-Id", "List-Unsubscribe",
-}
 
 const autoReplyActionSkipped = "skipped"
 
@@ -73,7 +66,7 @@ type gmailAutoReplySummary struct {
 
 func (c *GmailAutoReplyCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	body, err := resolveBodyInput(c.Body, c.BodyFile)
+	body, err := resolveBodyInput(ctx, c.Body, c.BodyFile)
 	if err != nil {
 		return err
 	}
@@ -124,7 +117,7 @@ func (c *GmailAutoReplyCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return dryRunErr
 	}
 
-	account, svc, err := requireGmailService(ctx, flags)
+	account, svc, err := requireGmailSendService(ctx, flags)
 	if err != nil {
 		return err
 	}
@@ -134,7 +127,7 @@ func (c *GmailAutoReplyCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"autoReply": summary})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"autoReply": summary})
 	}
 	if len(summary.Results) == 0 {
 		u.Out().Println("No matching messages")
@@ -157,9 +150,9 @@ func (c *GmailAutoReplyCmd) Run(ctx context.Context, flags *RootFlags) error {
 			sanitizeTab(item.Subject),
 		)
 	}
-	u.Out().Printf("matched\t%d", summary.Matched)
-	u.Out().Printf("replied\t%d", summary.Replied)
-	u.Out().Printf("skipped\t%d", summary.Skipped)
+	u.Out().Linef("matched\t%d", summary.Matched)
+	u.Out().Linef("replied\t%d", summary.Replied)
+	u.Out().Linef("skipped\t%d", summary.Skipped)
 	return nil
 }
 
@@ -169,8 +162,7 @@ func runGmailAutoReply(ctx context.Context, svc *gmail.Service, account string, 
 		Label: input.Label,
 	}
 
-	sendAsList, sendAsListErr := listSendAs(ctx, svc)
-	from, err := resolveComposeFrom(ctx, svc, account, input.From, sendAsList, sendAsListErr)
+	from, err := resolveComposeSender(ctx, svc, account, input.From)
 	if err != nil {
 		return summary, err
 	}
@@ -278,7 +270,7 @@ func runGmailAutoReply(ctx context.Context, svc *gmail.Service, account string, 
 func fetchMessageForAutoReply(ctx context.Context, svc *gmail.Service, messageID string) (*gmail.Message, error) {
 	return svc.Users.Messages.Get("me", messageID).
 		Format(gmailFormatMetadata).
-		MetadataHeaders(autoReplyMetadataHeaders...).
+		MetadataHeaders(gmailAutoReplyMetadataHeaders...).
 		Context(ctx).
 		Do()
 }

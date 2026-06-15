@@ -12,7 +12,6 @@ import (
 
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/idtoken"
-	"google.golang.org/api/option"
 
 	"github.com/steipete/gogcli/internal/ui"
 )
@@ -66,13 +65,6 @@ func TestGmailWatchStartCmd_HookTokenRequiresURL(t *testing.T) {
 }
 
 func TestGmailWatchStartCmd_NewServiceError(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
-	newGmailService = func(context.Context, string) (*gmail.Service, error) {
-		return nil, errors.New("boom")
-	}
-
 	setWatchTestConfigHome(t)
 
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
@@ -80,6 +72,9 @@ func TestGmailWatchStartCmd_NewServiceError(t *testing.T) {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := ui.WithUI(context.Background(), u)
+	ctx = withGmailTestServiceFactory(ctx, func(context.Context, string) (*gmail.Service, error) {
+		return nil, errors.New("boom")
+	})
 
 	if err := runKong(t, &GmailWatchStartCmd{}, []string{"--topic", "projects/p/topics/t"}, ctx, &RootFlags{Account: "a@b.com"}); err == nil {
 		t.Fatalf("expected error")
@@ -87,9 +82,6 @@ func TestGmailWatchStartCmd_NewServiceError(t *testing.T) {
 }
 
 func TestGmailWatchStartCmd_LabelResolveError(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	setWatchTestConfigHome(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,21 +93,14 @@ func TestGmailWatchStartCmd_LabelResolveError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	svc := newGmailServiceFromServer(t, srv)
 
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if uiErr != nil {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := ui.WithUI(context.Background(), u)
+	ctx = withGmailTestService(ctx, svc)
 
 	if err := runKong(t, &GmailWatchStartCmd{}, []string{"--topic", "projects/p/topics/t", "--label", "INBOX"}, ctx, &RootFlags{Account: "a@b.com"}); err == nil {
 		t.Fatalf("expected error")
@@ -123,9 +108,6 @@ func TestGmailWatchStartCmd_LabelResolveError(t *testing.T) {
 }
 
 func TestGmailWatchStartCmd_RequestError(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	setWatchTestConfigHome(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -137,21 +119,14 @@ func TestGmailWatchStartCmd_RequestError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	svc := newGmailServiceFromServer(t, srv)
 
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if uiErr != nil {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := ui.WithUI(context.Background(), u)
+	ctx = withGmailTestService(ctx, svc)
 
 	if err := runKong(t, &GmailWatchStartCmd{}, []string{"--topic", "projects/p/topics/t"}, ctx, &RootFlags{Account: "a@b.com"}); err == nil {
 		t.Fatalf("expected error")
@@ -159,9 +134,6 @@ func TestGmailWatchStartCmd_RequestError(t *testing.T) {
 }
 
 func TestGmailWatchStartCmd_BuildStateError(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	setWatchTestConfigHome(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,21 +148,14 @@ func TestGmailWatchStartCmd_BuildStateError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	svc := newGmailServiceFromServer(t, srv)
 
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if uiErr != nil {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := ui.WithUI(context.Background(), u)
+	ctx = withGmailTestService(ctx, svc)
 
 	if err := runKong(t, &GmailWatchStartCmd{}, []string{"--topic", "projects/p/topics/t"}, ctx, &RootFlags{Account: "a@b.com"}); err == nil {
 		t.Fatalf("expected error")
@@ -226,10 +191,7 @@ func TestGmailWatchStatusCmd_LoadError(t *testing.T) {
 func TestGmailWatchRenewCmd_MissingTopic(t *testing.T) {
 	setWatchTestConfigHome(t)
 
-	store, err := newGmailWatchStore("a@b.com")
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	store := newGmailWatchTestStore(t, "a@b.com")
 	_ = store.Update(func(s *gmailWatchState) error { s.Account = "a@b.com"; return nil })
 
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
@@ -272,10 +234,7 @@ func TestGmailWatchRenewCmd_LoadError(t *testing.T) {
 func TestGmailWatchRenewCmd_InvalidTTL(t *testing.T) {
 	setWatchTestConfigHome(t)
 
-	store, err := newGmailWatchStore("a@b.com")
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	store := newGmailWatchTestStore(t, "a@b.com")
 	_ = store.Update(func(s *gmailWatchState) error {
 		s.Account = "a@b.com"
 		s.Topic = "projects/p/topics/t"
@@ -294,19 +253,9 @@ func TestGmailWatchRenewCmd_InvalidTTL(t *testing.T) {
 }
 
 func TestGmailWatchRenewCmd_NewServiceError(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
-	newGmailService = func(context.Context, string) (*gmail.Service, error) {
-		return nil, errors.New("down")
-	}
-
 	setWatchTestConfigHome(t)
 
-	store, err := newGmailWatchStore("a@b.com")
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	store := newGmailWatchTestStore(t, "a@b.com")
 	_ = store.Update(func(s *gmailWatchState) error {
 		s.Account = "a@b.com"
 		s.Topic = "projects/p/topics/t"
@@ -318,6 +267,9 @@ func TestGmailWatchRenewCmd_NewServiceError(t *testing.T) {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := ui.WithUI(context.Background(), u)
+	ctx = withGmailTestServiceFactory(ctx, func(context.Context, string) (*gmail.Service, error) {
+		return nil, errors.New("down")
+	})
 
 	if err := runKong(t, &GmailWatchRenewCmd{}, []string{}, ctx, &RootFlags{Account: "a@b.com"}); err == nil {
 		t.Fatalf("expected error")
@@ -349,18 +301,14 @@ func TestGmailWatchStopCmd_MissingAccount(t *testing.T) {
 }
 
 func TestGmailWatchStopCmd_ServiceError(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
-	newGmailService = func(context.Context, string) (*gmail.Service, error) {
-		return nil, errors.New("nope")
-	}
-
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if uiErr != nil {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := ui.WithUI(context.Background(), u)
+	ctx = withGmailTestServiceFactory(ctx, func(context.Context, string) (*gmail.Service, error) {
+		return nil, errors.New("nope")
+	})
 
 	if err := (&GmailWatchStopCmd{}).Run(ctx, &RootFlags{Account: "a@b.com", Force: true}); err == nil {
 		t.Fatalf("expected error")
@@ -405,10 +353,7 @@ func TestGmailWatchServeCmd_HookFlagsError(t *testing.T) {
 
 	setWatchTestConfigHome(t)
 
-	store, err := newGmailWatchStore("a@b.com")
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	store := newGmailWatchTestStore(t, "a@b.com")
 	_ = store.Update(func(s *gmailWatchState) error { s.Account = "a@b.com"; return nil })
 
 	listenAndServe = func(*http.Server) error { return nil }
@@ -434,10 +379,7 @@ func TestGmailWatchServeCmd_OIDCValidatorError(t *testing.T) {
 
 	setWatchTestConfigHome(t)
 
-	store, err := newGmailWatchStore("a@b.com")
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	store := newGmailWatchTestStore(t, "a@b.com")
 	_ = store.Update(func(s *gmailWatchState) error { s.Account = "a@b.com"; return nil })
 
 	listenAndServe = func(*http.Server) error { return nil }

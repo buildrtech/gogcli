@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -39,13 +37,22 @@ func (c *CalendarConflictsCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if err != nil {
 		return err
 	}
-
-	calendarIDs, err := resolveSelectedCalendarIDs(ctx, svc, c.Cal, c.Calendars, c.All, true)
+	store, err := commandConfigStore(ctx)
 	if err != nil {
 		return err
 	}
-	if len(calendarIDs) == 0 {
-		return errors.New("no calendar IDs provided")
+
+	allCalendars := c.All
+	if !allCalendars && len(collectCalendarInputs(c.Cal, c.Calendars)) == 0 {
+		allCalendars = true
+	}
+
+	calendarIDs, err := resolveSelectedCalendarIDs(ctx, store, svc, c.Cal, c.Calendars, allCalendars, false)
+	if err != nil {
+		return err
+	}
+	if len(calendarIDs) < 2 {
+		return usage("calendar conflicts requires at least two calendars; pass --all or multiple --cal/--calendars values")
 	}
 
 	// Use timezone-aware time resolution
@@ -80,7 +87,7 @@ func (c *CalendarConflictsCmd) Run(ctx context.Context, flags *RootFlags) error 
 	conflicts := detectConflicts(resp.Calendars)
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"conflicts": conflicts,
 			"count":     len(conflicts),
 		})
@@ -91,8 +98,9 @@ func (c *CalendarConflictsCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return nil
 	}
 
-	fmt.Printf("CONFLICTS FOUND: %d\n\n", len(conflicts))
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	stdout := stdoutWriter(ctx)
+	fmt.Fprintf(stdout, "CONFLICTS FOUND: %d\n\n", len(conflicts))
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "START\tEND\tCALENDARS")
 	for _, c := range conflicts {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", c.Start, c.End, strings.Join(c.Calendars, ", "))
@@ -132,7 +140,7 @@ func detectConflicts(calendars map[string]calendar.FreeBusyCalendar) []conflict 
 		}
 	}
 
-	var conflicts []conflict
+	conflicts := make([]conflict, 0)
 	seen := make(map[string]bool)
 
 	for i := 0; i < len(allBusy); i++ {

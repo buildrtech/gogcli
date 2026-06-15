@@ -44,7 +44,7 @@ func TestCalendarUpdatePatchClearsRecurrence(t *testing.T) {
 	cmd := &CalendarUpdateCmd{}
 	kctx := parseKongContext(t, cmd, []string{"cal1", "evt1", "--rrule", " "})
 
-	patch, _, err := cmd.buildUpdatePatch(kctx)
+	patch, _, err := buildCalendarUpdatePatch(calendarUpdateInputFromCommand(cmd), calendarUpdateFieldsFromKong(kctx))
 	if err != nil {
 		t.Fatalf("buildUpdatePatch: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestCalendarUpdatePatchClearsReminders(t *testing.T) {
 	cmd := &CalendarUpdateCmd{}
 	kctx := parseKongContext(t, cmd, []string{"cal1", "evt1", "--reminder", " "})
 
-	patch, _, err := cmd.buildUpdatePatch(kctx)
+	patch, _, err := buildCalendarUpdatePatch(calendarUpdateInputFromCommand(cmd), calendarUpdateFieldsFromKong(kctx))
 	if err != nil {
 		t.Fatalf("buildUpdatePatch: %v", err)
 	}
@@ -77,5 +77,44 @@ func TestCalendarUpdatePatchClearsReminders(t *testing.T) {
 	}
 	if !hasForceSendField(patch.ForceSendFields, "Reminders") {
 		t.Fatalf("expected Reminders in ForceSendFields")
+	}
+}
+
+func TestCalendarUpdatePatchExplicitTimezones(t *testing.T) {
+	cmd := &CalendarUpdateCmd{}
+	kctx := parseKongContext(t, cmd, []string{
+		"cal1",
+		"evt1",
+		"--from", "2026-08-13T13:40:00+02:00",
+		"--to", "2026-08-13T17:00:00-04:00",
+		"--start-timezone", "Europe/Rome",
+		"--end-timezone", "America/New_York",
+	})
+
+	patch, changed, err := buildCalendarUpdatePatch(calendarUpdateInputFromCommand(cmd), calendarUpdateFieldsFromKong(kctx))
+	if err != nil {
+		t.Fatalf("buildUpdatePatch: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected changed patch")
+	}
+	if patch.Start == nil || patch.Start.TimeZone != "Europe/Rome" {
+		t.Fatalf("expected start timezone Europe/Rome, got %#v", patch.Start)
+	}
+	if patch.End == nil || patch.End.TimeZone != "America/New_York" {
+		t.Fatalf("expected end timezone America/New_York, got %#v", patch.End)
+	}
+}
+
+func TestCalendarUpdatePatchTimezoneRequiresTimeField(t *testing.T) {
+	cmd := &CalendarUpdateCmd{}
+	kctx := parseKongContext(t, cmd, []string{
+		"cal1",
+		"evt1",
+		"--start-timezone", "Europe/Rome",
+	})
+
+	if _, _, err := buildCalendarUpdatePatch(calendarUpdateInputFromCommand(cmd), calendarUpdateFieldsFromKong(kctx)); err == nil {
+		t.Fatalf("expected --start-timezone without --from to fail")
 	}
 }

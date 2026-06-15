@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,10 +12,13 @@ import (
 // DocsCommentsCmd is the parent command for comment operations on a Google Doc.
 type DocsCommentsCmd struct {
 	List    DocsCommentsListCmd    `cmd:"" name:"list" aliases:"ls" help:"List comments on a Google Doc"`
+	Poll    DocsCommentsPollCmd    `cmd:"" name:"poll" help:"Poll new and modified comments with persisted state"`
 	Get     DocsCommentsGetCmd     `cmd:"" name:"get" aliases:"info,show" help:"Get a comment by ID"`
 	Add     DocsCommentsAddCmd     `cmd:"" name:"add" aliases:"create,new" help:"Add a comment to a Google Doc"`
+	Locate  DocsCommentsLocateCmd  `cmd:"" name:"locate" help:"Resolve a comment quote to Docs API index ranges"`
 	Reply   DocsCommentsReplyCmd   `cmd:"" name:"reply" aliases:"respond" help:"Reply to a comment"`
 	Resolve DocsCommentsResolveCmd `cmd:"" name:"resolve" help:"Resolve a comment (mark as done)"`
+	Reopen  DocsCommentsReopenCmd  `cmd:"" name:"reopen" help:"Reopen a previously resolved comment"`
 	Delete  DocsCommentsDeleteCmd  `cmd:"" name:"delete" aliases:"rm,del,remove" help:"Delete a comment"`
 }
 
@@ -26,6 +30,7 @@ type DocsCommentsListCmd struct {
 	Page            string `name:"page" aliases:"cursor" help:"Page token for pagination"`
 	All             bool   `name:"all" aliases:"all-pages" help:"Fetch all pages"`
 	FailEmpty       bool   `name:"fail-empty" aliases:"non-empty,require-results" help:"Exit with code 3 if no results"`
+	Since           string `name:"since" help:"Only return comments modified at or after this RFC3339 timestamp"`
 }
 
 func (c *DocsCommentsListCmd) Run(ctx context.Context, flags *RootFlags) error {
@@ -36,6 +41,10 @@ func (c *DocsCommentsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 	if c.Max <= 0 {
 		return usage("max must be > 0")
+	}
+	since, err := normalizeDriveCommentSince(c.Since)
+	if err != nil {
+		return err
 	}
 
 	_, svc, err := requireDriveService(ctx, flags)
@@ -48,6 +57,7 @@ func (c *DocsCommentsListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		includeResolved: c.IncludeResolved,
 		scanForOpen:     true,
 		page:            c.Page,
+		since:           since,
 		all:             c.All,
 		failEmpty:       c.FailEmpty,
 		max:             c.Max,
@@ -115,6 +125,9 @@ func (c *DocsCommentsAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if content == "" {
 		return usage("empty content")
 	}
+	if err := validateDocsCommentAnchor(anchor); err != nil {
+		return err
+	}
 
 	if err := dryRunExit(ctx, flags, "docs.comments.add", map[string]any{
 		"doc_id":  docID,
@@ -137,11 +150,22 @@ func (c *DocsCommentsAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	return writeDriveCommentMutation(ctx, u, created, true)
 }
 
+func validateDocsCommentAnchor(anchor string) error {
+	if strings.TrimSpace(anchor) == "" {
+		return nil
+	}
+	if !json.Valid([]byte(anchor)) {
+		return usage("invalid --anchor JSON")
+	}
+	return nil
+}
+
 // DocsCommentsReplyCmd replies to a comment on a Google Doc.
 type DocsCommentsReplyCmd struct {
 	DocID     string `arg:"" name:"docId" help:"Google Doc ID or URL"`
 	CommentID string `arg:"" name:"commentId" help:"Comment ID"`
 	Content   string `arg:"" name:"content" help:"Reply text"`
+	Action    string `name:"action" enum:"resolve,reopen," default:"" help:"Optional action to take on the parent comment alongside the reply: resolve|reopen"`
 }
 
 func (c *DocsCommentsReplyCmd) Run(ctx context.Context, flags *RootFlags) error {
@@ -158,13 +182,18 @@ func (c *DocsCommentsReplyCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if content == "" {
 		return usage("empty content")
 	}
+	action, err := validateDriveReplyAction(c.Action)
+	if err != nil {
+		return usage(err.Error())
+	}
 
-	if err := dryRunExit(ctx, flags, "docs.comments.reply", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "docs.comments.reply", map[string]any{
 		"doc_id":     docID,
 		"comment_id": commentID,
 		"content":    content,
-	}); err != nil {
-		return err
+		"action":     action,
+	}); dryRunErr != nil {
+		return dryRunErr
 	}
 
 	_, svc, err := requireDriveService(ctx, flags)
@@ -172,11 +201,12 @@ func (c *DocsCommentsReplyCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return err
 	}
 
-	created, err := createDriveReply(ctx, svc, docID, commentID, content)
+	created, err := createDriveReplyWithAction(ctx, svc, docID, commentID, content, action)
 	if err != nil {
 		return err
 	}
-	return writeDriveReplyMutation(ctx, u, created, false, "", "", "")
+	resolved := action == driveReplyActionResolve || action == driveReplyActionReopen
+	return writeDriveReplyMutationWithAction(ctx, u, created, resolved, action, "docId", docID, commentID)
 }
 
 // DocsCommentsResolveCmd resolves a comment by posting an empty reply with action "resolve".
@@ -201,6 +231,7 @@ func (c *DocsCommentsResolveCmd) Run(ctx context.Context, flags *RootFlags) erro
 	if err := dryRunExit(ctx, flags, "docs.comments.resolve", map[string]any{
 		"doc_id":     docID,
 		"comment_id": commentID,
+		"message":    strings.TrimSpace(c.Message),
 	}); err != nil {
 		return err
 	}
@@ -214,7 +245,46 @@ func (c *DocsCommentsResolveCmd) Run(ctx context.Context, flags *RootFlags) erro
 	if err != nil {
 		return err
 	}
-	return writeDriveReplyMutation(ctx, u, created, true, "docId", docID, commentID)
+	return writeDriveReplyMutationWithAction(ctx, u, created, true, driveReplyActionResolve, "docId", docID, commentID)
+}
+
+// DocsCommentsReopenCmd reopens a previously resolved comment on a Google Doc.
+// The Drive API reopens a comment when a reply is created with action="reopen".
+type DocsCommentsReopenCmd struct {
+	DocID     string `arg:"" name:"docId" help:"Google Doc ID or URL"`
+	CommentID string `arg:"" name:"commentId" help:"Comment ID"`
+	Message   string `name:"message" short:"m" help:"Optional message to include when reopening"`
+}
+
+func (c *DocsCommentsReopenCmd) Run(ctx context.Context, flags *RootFlags) error {
+	u := ui.FromContext(ctx)
+	docID := normalizeGoogleID(strings.TrimSpace(c.DocID))
+	commentID := strings.TrimSpace(c.CommentID)
+	if docID == "" {
+		return usage("empty docId")
+	}
+	if commentID == "" {
+		return usage("empty commentId")
+	}
+
+	if err := dryRunExit(ctx, flags, "docs.comments.reopen", map[string]any{
+		"doc_id":     docID,
+		"comment_id": commentID,
+		"message":    strings.TrimSpace(c.Message),
+	}); err != nil {
+		return err
+	}
+
+	_, svc, err := requireDriveService(ctx, flags)
+	if err != nil {
+		return err
+	}
+
+	created, err := reopenDriveComment(ctx, svc, docID, commentID, c.Message)
+	if err != nil {
+		return err
+	}
+	return writeDriveReplyMutationWithAction(ctx, u, created, true, driveReplyActionReopen, "docId", docID, commentID)
 }
 
 // DocsCommentsDeleteCmd deletes a comment on a Google Doc.
@@ -234,7 +304,10 @@ func (c *DocsCommentsDeleteCmd) Run(ctx context.Context, flags *RootFlags) error
 		return usage("empty commentId")
 	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("delete comment %s from doc %s", commentID, docID)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "docs.comments.delete", map[string]any{
+		"doc_id":     docID,
+		"comment_id": commentID,
+	}, fmt.Sprintf("delete comment %s from doc %s", commentID, docID)); confirmErr != nil {
 		return confirmErr
 	}
 

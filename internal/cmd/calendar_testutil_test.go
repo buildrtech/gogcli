@@ -1,33 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"google.golang.org/api/calendar/v3"
-	"google.golang.org/api/option"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/steipete/gogcli/internal/app"
 )
 
 func newCalendarServiceForTest(t *testing.T, h http.Handler) (*calendar.Service, func()) {
 	t.Helper()
 
-	srv := httptest.NewServer(h)
-	svc, err := calendar.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		srv.Close()
-		t.Fatalf("NewService: %v", err)
-	}
-	return svc, srv.Close
+	return newGoogleTestService(t, h, calendar.NewService)
 }
 
 func newTestCalendarService(t *testing.T, h http.Handler) (*calendar.Service, func()) {
@@ -35,22 +23,34 @@ func newTestCalendarService(t *testing.T, h http.Handler) (*calendar.Service, fu
 	return newCalendarServiceForTest(t, h)
 }
 
-func newCalendarOutputContext(t *testing.T, stdout, stderr io.Writer) context.Context {
-	t.Helper()
-
-	u, err := ui.New(ui.Options{Stdout: stdout, Stderr: stderr, Color: "never"})
-	if err != nil {
-		t.Fatalf("ui.New: %v", err)
-	}
-	return ui.WithUI(context.Background(), u)
+func withCalendarTestService(ctx context.Context, svc *calendar.Service) context.Context {
+	return withCalendarTestServiceFactory(ctx, func(context.Context, string) (*calendar.Service, error) {
+		return svc, nil
+	})
 }
 
-func newCalendarJSONContext(t *testing.T) context.Context {
-	t.Helper()
-	return newCalendarJSONOutputContext(t, io.Discard, io.Discard)
+func withCalendarTestServiceFactory(ctx context.Context, factory app.CalendarServiceFactory) context.Context {
+	return withTestRuntime(ctx, func(runtime *app.Runtime) {
+		runtime.Services.Calendar = factory
+	})
 }
 
-func newCalendarJSONOutputContext(t *testing.T, stdout, stderr io.Writer) context.Context {
+func executeWithCalendarTestService(t *testing.T, args []string, svc *calendar.Service) executeTestResult {
 	t.Helper()
-	return outfmt.WithMode(newCalendarOutputContext(t, stdout, stderr), outfmt.Mode{JSON: true})
+	return executeWithCalendarTestServiceFactory(t, args, func(context.Context, string) (*calendar.Service, error) {
+		return svc, nil
+	})
+}
+
+func executeWithCalendarTestServiceFactory(t *testing.T, args []string, factory app.CalendarServiceFactory) executeTestResult {
+	t.Helper()
+	return executeWithTestRuntime(t, args, &app.Runtime{Services: app.Services{
+		Calendar: factory,
+	}})
+}
+
+func newCalendarTestJSONContext(t *testing.T, svc *calendar.Service) (context.Context, *bytes.Buffer) {
+	t.Helper()
+	var output bytes.Buffer
+	return withCalendarTestService(newCmdRuntimeJSONOutputContext(t, &output, io.Discard), svc), &output
 }

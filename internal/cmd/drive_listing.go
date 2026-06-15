@@ -3,27 +3,30 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/drive/v3"
+	gapi "google.golang.org/api/googleapi"
 
 	"github.com/steipete/gogcli/internal/outfmt"
 	"github.com/steipete/gogcli/internal/ui"
 )
-
-const driveFileListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, webViewLink)"
 
 type driveFileListOptions struct {
 	query     string
 	max       int64
 	page      string
 	allDrives bool
+	driveID   string
+	fields    string // optional field mask override
 }
 
 func (c *DriveLsCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if c.All && strings.TrimSpace(c.Parent) != "" {
 		return usage("--all cannot be combined with --parent")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
 	}
 
 	folderID := strings.TrimSpace(c.Parent)
@@ -46,6 +49,7 @@ func (c *DriveLsCmd) Run(ctx context.Context, flags *RootFlags) error {
 		max:       c.Max,
 		page:      c.Page,
 		allDrives: c.AllDrives,
+		fields:    c.Fields,
 	})
 	if err != nil {
 		return err
@@ -59,17 +63,35 @@ func (c *DriveSearchCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if query == "" {
 		return usage("missing query")
 	}
+	driveID := strings.TrimSpace(c.Drive)
+	parentID := strings.TrimSpace(c.Parent)
+
+	if driveID != "" && !c.AllDrives {
+		return usage("--drive cannot be combined with --no-all-drives")
+	}
+	if parentID != "" && c.RawQuery {
+		return usage("--parent cannot be combined with --raw-query; include the \"'<parentId>' in parents\" clause in your raw query instead")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 
 	_, svc, err := requireDriveService(ctx, flags)
 	if err != nil {
 		return err
 	}
 
+	finalQuery := buildDriveSearchQuery(query, c.RawQuery)
+	if parentID != "" {
+		finalQuery = fmt.Sprintf("'%s' in parents and %s", escapeDriveQueryString(parentID), finalQuery)
+	}
+
 	resp, err := listDriveFiles(ctx, svc, driveFileListOptions{
-		query:     buildDriveSearchQuery(query, c.RawQuery),
+		query:     finalQuery,
 		max:       c.Max,
 		page:      c.Page,
 		allDrives: c.AllDrives,
+		driveID:   driveID,
 	})
 	if err != nil {
 		return err
@@ -84,14 +106,18 @@ func listDriveFiles(ctx context.Context, svc *drive.Service, opts driveFileListO
 		PageSize(opts.max).
 		PageToken(opts.page).
 		OrderBy("modifiedTime desc")
-	call = driveFilesListCallWithDriveSupport(call, opts.allDrives)
-	return call.Fields(driveFileListFields).Context(ctx).Do()
+	call = driveFilesListCallWithDriveSupport(call, opts.allDrives, opts.driveID)
+	mask := driveFileListFields
+	if strings.TrimSpace(opts.fields) != "" {
+		mask = opts.fields
+	}
+	return call.Fields(gapi.Field(mask)).Context(ctx).Do()
 }
 
 func writeDriveFileList(ctx context.Context, resp *drive.FileList, emptyMessage string) error {
 	u := ui.FromContext(ctx)
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"files":         resp.Files,
 			"nextPageToken": resp.NextPageToken,
 		})
@@ -102,20 +128,17 @@ func writeDriveFileList(ctx context.Context, resp *drive.FileList, emptyMessage 
 		return nil
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "ID\tNAME\tTYPE\tSIZE\tMODIFIED")
-	for _, f := range resp.Files {
-		fmt.Fprintf(
-			w,
-			"%s\t%s\t%s\t%s\t%s\n",
-			f.Id,
-			f.Name,
-			driveType(f.MimeType),
-			formatDriveSize(f.Size),
-			formatDateTime(f.ModifiedTime),
-		)
+	if err := outfmt.WriteTable(ctx, stdoutWriter(ctx), resp.Files, driveFileListColumns(outfmt.IsPlain(ctx))); err != nil {
+		return err
 	}
 	printNextPageHint(u, resp.NextPageToken)
 	return nil
+}
+
+func driveOwnerEmail(owners []*drive.User) string {
+	if len(owners) == 0 || owners[0] == nil || strings.TrimSpace(owners[0].EmailAddress) == "" {
+		return "-"
+	}
+
+	return owners[0].EmailAddress
 }

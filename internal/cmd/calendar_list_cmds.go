@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/calendar/v3"
@@ -21,12 +19,15 @@ type CalendarCalendarsCmd struct {
 
 func (c *CalendarCalendarsCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	account, err := requireAccount(flags)
 	if err != nil {
 		return err
 	}
 
-	svc, err := newCalendarService(ctx, account)
+	svc, err := calendarService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -43,22 +44,12 @@ func (c *CalendarCalendarsCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return r.Items, r.NextPageToken, nil
 	}
 
-	var items []*calendar.CalendarListEntry
-	nextPageToken := ""
-	if c.All {
-		all, collectErr := collectAllPages(c.Page, fetch)
-		if collectErr != nil {
-			return collectErr
-		}
-		items = all
-	} else {
-		items, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	items, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 	if outfmt.IsJSON(ctx) {
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"calendars":     items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -74,13 +65,15 @@ func (c *CalendarCalendarsCmd) Run(ctx context.Context, flags *RootFlags) error 
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "ID\tNAME\tROLE")
-	for _, cal := range items {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", cal.Id, cal.Summary, cal.AccessRole)
+	if err := outfmt.WriteTable(
+		ctx,
+		stdoutWriter(ctx),
+		compactCalendarRows(items),
+		calendarListColumns(),
+	); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
@@ -93,20 +86,11 @@ type CalendarSubscribeCmd struct {
 
 func (c *CalendarSubscribeCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	calendarID := strings.TrimSpace(c.CalendarID)
 	if calendarID == "" {
 		return usage("calendarId required")
 	}
 	colorID, err := validateCalendarColorId(c.ColorID)
-	if err != nil {
-		return err
-	}
-
-	svc, err := newCalendarService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -120,16 +104,33 @@ func (c *CalendarSubscribeCmd) Run(ctx context.Context, flags *RootFlags) error 
 		entry.ColorId = colorID
 	}
 
+	if dryRunErr := dryRunExit(ctx, flags, "calendar.subscribe", map[string]any{
+		"calendar_id": calendarID,
+		"entry":       entry,
+	}); dryRunErr != nil {
+		return dryRunErr
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := calendarService(ctx, account)
+	if err != nil {
+		return err
+	}
+
 	added, err := svc.CalendarList.Insert(entry).Do()
 	if err != nil {
 		return err
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"calendar": added})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"calendar": added})
 	}
-	u.Out().Printf("subscribed\t%s", added.Id)
-	u.Out().Printf("name\t%s", added.Summary)
-	u.Out().Printf("role\t%s", added.AccessRole)
+	u.Out().Linef("subscribed\t%s", added.Id)
+	u.Out().Linef("name\t%s", added.Summary)
+	u.Out().Linef("role\t%s", added.AccessRole)
 	return nil
 }
 
@@ -143,6 +144,9 @@ type CalendarAclCmd struct {
 
 func (c *CalendarAclCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	account, err := requireAccount(flags)
 	if err != nil {
 		return err
@@ -152,11 +156,15 @@ func (c *CalendarAclCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("calendarId required")
 	}
 
-	svc, err := newCalendarService(ctx, account)
+	svc, err := calendarService(ctx, account)
 	if err != nil {
 		return err
 	}
-	calendarID, err = resolveCalendarSelector(ctx, svc, calendarID, false)
+	store, err := commandConfigStore(ctx)
+	if err != nil {
+		return err
+	}
+	calendarID, err = resolveCalendarSelector(ctx, store, svc, calendarID, false)
 	if err != nil {
 		return err
 	}
@@ -173,22 +181,12 @@ func (c *CalendarAclCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return r.Items, r.NextPageToken, nil
 	}
 
-	var items []*calendar.AclRule
-	nextPageToken := ""
-	if c.All {
-		all, collectErr := collectAllPages(c.Page, fetch)
-		if collectErr != nil {
-			return collectErr
-		}
-		items = all
-	} else {
-		items, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	items, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 	if outfmt.IsJSON(ctx) {
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"rules":         items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -204,18 +202,14 @@ func (c *CalendarAclCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "SCOPE_TYPE\tSCOPE_VALUE\tROLE")
-	for _, rule := range items {
-		scopeType := ""
-		scopeValue := ""
-		if rule.Scope != nil {
-			scopeType = rule.Scope.Type
-			scopeValue = rule.Scope.Value
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", scopeType, scopeValue, rule.Role)
+	if err := outfmt.WriteTable(
+		ctx,
+		stdoutWriter(ctx),
+		compactCalendarRows(items),
+		calendarACLColumns(),
+	); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }

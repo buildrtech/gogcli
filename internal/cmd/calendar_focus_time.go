@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"google.golang.org/api/calendar/v3"
@@ -20,7 +19,11 @@ type CalendarFocusTimeCmd struct {
 }
 
 func (c *CalendarFocusTimeCmd) Run(ctx context.Context, flags *RootFlags) error {
-	calendarID, err := prepareCalendarID(c.CalendarID, true)
+	store, err := commandConfigStore(ctx)
+	if err != nil {
+		return err
+	}
+	calendarID, err := prepareCalendarID(store, c.CalendarID, true)
 	if err != nil {
 		return err
 	}
@@ -33,11 +36,17 @@ func (c *CalendarFocusTimeCmd) Run(ctx context.Context, flags *RootFlags) error 
 	if err != nil {
 		return err
 	}
+	if validateErr := validateCalendarDateTimeFlag("--from", c.From); validateErr != nil {
+		return validateErr
+	}
+	if validateErr := validateCalendarDateTimeFlag("--to", c.To); validateErr != nil {
+		return validateErr
+	}
 
 	event := &calendar.Event{
 		Summary:      strings.TrimSpace(c.Summary),
-		Start:        &calendar.EventDateTime{DateTime: strings.TrimSpace(c.From)},
-		End:          &calendar.EventDateTime{DateTime: strings.TrimSpace(c.To)},
+		Start:        buildEventDateTime(c.From, false),
+		End:          buildEventDateTime(c.To, false),
 		EventType:    eventTypeFocusTime,
 		Transparency: "opaque",
 		FocusTimeProperties: &calendar.EventFocusTimeProperties{
@@ -48,7 +57,7 @@ func (c *CalendarFocusTimeCmd) Run(ctx context.Context, flags *RootFlags) error 
 		Recurrence: buildRecurrence(c.Recurrence),
 	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "calendar.focus_time", map[string]any{
+	if dryRunErr := dryRunExit(ctx, flags, "calendar.focus-time", map[string]any{
 		"calendar_id": calendarID,
 		"event":       event,
 	}); dryRunErr != nil {
@@ -77,7 +86,7 @@ func validateAutoDeclineMode(s string) (string, error) {
 	case "new":
 		return "declineOnlyNewConflictingInvitations", nil
 	default:
-		return "", fmt.Errorf("invalid auto-decline mode: %q (must be none, all, or new)", s)
+		return "", usagef("invalid auto-decline mode: %q (must be none, all, or new)", s)
 	}
 }
 
@@ -89,6 +98,6 @@ func validateChatStatus(s string) (string, error) {
 	case "donotdisturb", "dnd":
 		return "doNotDisturb", nil
 	default:
-		return "", fmt.Errorf("invalid chat status: %q (must be available or doNotDisturb)", s)
+		return "", usagef("invalid chat status: %q (must be available or doNotDisturb)", s)
 	}
 }

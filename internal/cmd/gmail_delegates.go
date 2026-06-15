@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/gmail/v1"
@@ -31,8 +30,9 @@ func (c *GmailDelegatesListCmd) Run(ctx context.Context, flags *RootFlags) error
 	if err != nil {
 		return err
 	}
-	rows := make([]gmailEmailStatusRow, 0, len(resp.Delegates))
-	for _, d := range resp.Delegates {
+	delegates := normalizeGmailSettingsItems(resp.Delegates)
+	rows := make([]gmailEmailStatusRow, 0, len(delegates))
+	for _, d := range delegates {
 		if d == nil {
 			continue
 		}
@@ -41,7 +41,7 @@ func (c *GmailDelegatesListCmd) Run(ctx context.Context, flags *RootFlags) error
 			Status: d.VerificationStatus,
 		})
 	}
-	return writeGmailEmailStatusList(ctx, "delegates", resp.Delegates, "No delegates", rows)
+	return writeGmailEmailStatusList(ctx, "delegates", delegates, "No delegates", rows)
 }
 
 type GmailDelegatesGetCmd struct {
@@ -57,6 +57,9 @@ func (c *GmailDelegatesGetCmd) Run(ctx context.Context, flags *RootFlags) error 
 	delegateEmail := strings.TrimSpace(c.DelegateEmail)
 	if delegateEmail == "" {
 		return usage("empty delegateEmail")
+	}
+	if validateErr := validateGmailSettingsEmail("delegateEmail", delegateEmail); validateErr != nil {
+		return validateErr
 	}
 	delegate, err := svc.Users.Settings.Delegates.Get("me", delegateEmail).Do()
 	if err != nil {
@@ -76,6 +79,9 @@ func (c *GmailDelegatesAddCmd) Run(ctx context.Context, flags *RootFlags) error 
 	delegateEmail := strings.TrimSpace(c.DelegateEmail)
 	if delegateEmail == "" {
 		return usage("empty delegateEmail")
+	}
+	if err := validateGmailSettingsEmail("delegateEmail", delegateEmail); err != nil {
+		return err
 	}
 
 	if err := dryRunExit(ctx, flags, "gmail.delegates.add", map[string]any{
@@ -121,8 +127,13 @@ func (c *GmailDelegatesRemoveCmd) Run(ctx context.Context, flags *RootFlags) err
 	if delegateEmail == "" {
 		return usage("empty delegateEmail")
 	}
+	if err := validateGmailSettingsEmail("delegateEmail", delegateEmail); err != nil {
+		return err
+	}
 
-	if confirmErr := confirmDestructive(ctx, flags, fmt.Sprintf("remove gmail delegate %s", delegateEmail)); confirmErr != nil {
+	if confirmErr := dryRunAndConfirmDestructive(ctx, flags, "gmail.delegates.remove", map[string]any{
+		"delegate_email": delegateEmail,
+	}, fmt.Sprintf("remove gmail delegate %s", delegateEmail)); confirmErr != nil {
 		return confirmErr
 	}
 
@@ -137,12 +148,12 @@ func (c *GmailDelegatesRemoveCmd) Run(ctx context.Context, flags *RootFlags) err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"success":       true,
 			"delegateEmail": delegateEmail,
 		})
 	}
 
-	ui.FromContext(ctx).Out().Printf("Delegate %s removed successfully", delegateEmail)
+	ui.FromContext(ctx).Out().Linef("Delegate %s removed successfully", delegateEmail)
 	return nil
 }

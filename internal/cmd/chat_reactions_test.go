@@ -1,16 +1,70 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"google.golang.org/api/chat/v1"
-	"google.golang.org/api/option"
 )
+
+func TestNormalizeSpace(t *testing.T) {
+	tests := []struct {
+		name    string
+		space   string
+		want    string
+		wantErr bool
+	}{
+		{name: "full resource path", space: "spaces/AAA", want: "spaces/AAA"},
+		{name: "bare id", space: "AAA", want: "spaces/AAA"},
+		{name: "empty space", wantErr: true},
+		{name: "empty full resource id", space: "spaces/", wantErr: true},
+		{name: "extra path segment", space: "spaces/AAA/extra", wantErr: true},
+		{name: "bare id with slash", space: "AAA/extra", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeSpace(tt.space)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeSpace(%q) error = %v, wantErr %v", tt.space, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("normalizeSpace(%q) = %q, want %q", tt.space, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeThread(t *testing.T) {
+	tests := []struct {
+		name    string
+		space   string
+		thread  string
+		want    string
+		wantErr bool
+	}{
+		{name: "full resource path", thread: "spaces/AAA/threads/t1", want: "spaces/AAA/threads/t1"},
+		{name: "bare id with space", space: "spaces/AAA", thread: "t1", want: "spaces/AAA/threads/t1"},
+		{name: "threads prefix with bare id", space: "AAA", thread: "threads/t1", want: "spaces/AAA/threads/t1"},
+		{name: "empty thread", wantErr: true},
+		{name: "full resource missing id", thread: "spaces/AAA/threads/", wantErr: true},
+		{name: "full resource extra segment", thread: "spaces/AAA/threads/t1/extra", wantErr: true},
+		{name: "wrong full resource kind", thread: "spaces/AAA/messages/m1", wantErr: true},
+		{name: "bare id with slash", space: "AAA", thread: "t1/extra", wantErr: true},
+		{name: "invalid space", space: "AAA/extra", thread: "t1", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeThread(tt.space, tt.thread)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeThread(%q, %q) error = %v, wantErr %v", tt.space, tt.thread, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("normalizeThread(%q, %q) = %q, want %q", tt.space, tt.thread, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestNormalizeMessage(t *testing.T) {
 	tests := []struct {
@@ -51,6 +105,28 @@ func TestNormalizeMessage(t *testing.T) {
 			msg:     "spaces/AAA/threads/t1",
 			wantErr: true,
 		},
+		{
+			name:    "full resource missing id",
+			msg:     "spaces/AAA/messages/",
+			wantErr: true,
+		},
+		{
+			name:    "full resource extra segment",
+			msg:     "spaces/AAA/messages/msg1/extra",
+			wantErr: true,
+		},
+		{
+			name:    "messages prefix missing id",
+			space:   "AAA",
+			msg:     "messages/",
+			wantErr: true,
+		},
+		{
+			name:    "invalid space",
+			space:   "AAA/extra",
+			msg:     "msg1",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,12 +141,60 @@ func TestNormalizeMessage(t *testing.T) {
 	}
 }
 
-func TestExecute_ChatMessagesReactionsCreate_JSON(t *testing.T) {
-	origNew := newChatService
-	t.Cleanup(func() { newChatService = origNew })
+func TestNormalizeReaction(t *testing.T) {
+	tests := []struct {
+		name     string
+		reaction string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:     "full resource path",
+			reaction: "spaces/AAA/messages/msg1/reactions/r1",
+			want:     "spaces/AAA/messages/msg1/reactions/r1",
+		},
+		{
+			name:     "empty reaction",
+			reaction: "",
+			wantErr:  true,
+		},
+		{
+			name:     "bare id",
+			reaction: "r1",
+			wantErr:  true,
+		},
+		{
+			name:     "message resource",
+			reaction: "spaces/AAA/messages/msg1",
+			wantErr:  true,
+		},
+		{
+			name:     "empty reaction id",
+			reaction: "spaces/AAA/messages/msg1/reactions/",
+			wantErr:  true,
+		},
+		{
+			name:     "extra path segment",
+			reaction: "spaces/AAA/messages/msg1/reactions/r1/extra",
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeReaction(tt.reaction)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeReaction(%q) error = %v, wantErr %v", tt.reaction, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("normalizeReaction(%q) = %q, want %q", tt.reaction, got, tt.want)
+			}
+		})
+	}
+}
 
+func TestExecute_ChatMessagesReactionsCreate_JSON(t *testing.T) {
 	var gotEmoji string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	svc := newChatTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/reactions")) {
 			http.NotFound(w, r)
 			return
@@ -86,25 +210,10 @@ func TestExecute_ChatMessagesReactionsCreate_JSON(t *testing.T) {
 			"emoji": map[string]any{"unicode": gotEmoji},
 		})
 	}))
-	defer srv.Close()
-
-	svc, err := chat.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	result := executeWithChatTestService(t, []string{"--json", "--account", "a@b.com", "chat", "messages", "reactions", "create", "spaces/AAA/messages/msg1", "📦"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newChatService = func(context.Context, string) (*chat.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--account", "a@b.com", "chat", "messages", "reactions", "create", "spaces/AAA/messages/msg1", "📦"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
 
 	if gotEmoji != "📦" {
 		t.Fatalf("unexpected emoji sent: %q", gotEmoji)
@@ -115,7 +224,7 @@ func TestExecute_ChatMessagesReactionsCreate_JSON(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"reaction"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !strings.Contains(parsed.Reaction.Name, "/reactions/") {
@@ -124,11 +233,8 @@ func TestExecute_ChatMessagesReactionsCreate_JSON(t *testing.T) {
 }
 
 func TestExecute_ChatMessagesReactionsCreate_BareIDWithSpace(t *testing.T) {
-	origNew := newChatService
-	t.Cleanup(func() { newChatService = origNew })
-
 	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	svc := newChatTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/reactions")) {
 			http.NotFound(w, r)
 			return
@@ -140,38 +246,40 @@ func TestExecute_ChatMessagesReactionsCreate_BareIDWithSpace(t *testing.T) {
 			"emoji": map[string]any{"unicode": "📦"},
 		})
 	}))
-	defer srv.Close()
-
-	svc, err := chat.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	result := executeWithChatTestService(t, []string{"--account", "a@b.com", "chat", "messages", "reactions", "create", "msg1", "📦", "--space", "AAA"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newChatService = func(context.Context, string) (*chat.Service, error) { return svc, nil }
-
-	_ = captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--account", "a@b.com", "chat", "messages", "reactions", "create", "msg1", "📦", "--space", "AAA"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
 
 	if !strings.Contains(gotPath, "spaces/AAA/messages/msg1") {
 		t.Fatalf("unexpected request path: %q", gotPath)
 	}
 }
 
-func TestExecute_ChatMessagesReact_Shorthand(t *testing.T) {
-	origNew := newChatService
-	t.Cleanup(func() { newChatService = origNew })
+func TestExecute_ChatMessagesReactionsCreate_InvalidMessageFailsBeforeDryRun(t *testing.T) {
+	testCases := [][]string{
+		{"--account", "a@b.com", "--dry-run", "chat", "messages", "reactions", "create", "spaces/AAA/messages/msg1/extra", "X"},
+		{"--account", "a@b.com", "--dry-run", "chat", "messages", "reactions", "create", "msg1", "X", "--space", "AAA/extra"},
+	}
+	for _, args := range testCases {
+		t.Run(strings.Join(args[4:], "_"), func(t *testing.T) {
+			result := executeWithChatTestServiceFactory(
+				t,
+				args,
+				unexpectedChatTestService(t, "expected validation to fail before creating chat service"),
+			)
+			var exitErr *ExitError
+			if !errors.As(result.err, &exitErr) || exitErr.Code != 2 || !strings.Contains(result.err.Error(), "required: message") {
+				t.Fatalf("unexpected err: %v", result.err)
+			}
+		})
+	}
+}
 
+func TestExecute_ChatMessagesReact_Shorthand(t *testing.T) {
 	var gotPath string
 	var gotEmoji string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	svc := newChatTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/reactions")) {
 			http.NotFound(w, r)
 			return
@@ -188,25 +296,10 @@ func TestExecute_ChatMessagesReact_Shorthand(t *testing.T) {
 			"emoji": map[string]any{"unicode": gotEmoji},
 		})
 	}))
-	defer srv.Close()
-
-	svc, err := chat.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	result := executeWithChatTestService(t, []string{"--account", "a@b.com", "chat", "messages", "react", "spaces/AAA/messages/msg1", "📦"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newChatService = func(context.Context, string) (*chat.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--account", "a@b.com", "chat", "messages", "react", "spaces/AAA/messages/msg1", "📦"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
 
 	if !strings.Contains(gotPath, "spaces/AAA/messages/msg1/reactions") {
 		t.Fatalf("unexpected request path: %q", gotPath)
@@ -214,20 +307,39 @@ func TestExecute_ChatMessagesReact_Shorthand(t *testing.T) {
 	if gotEmoji != "📦" {
 		t.Fatalf("unexpected emoji sent: %q", gotEmoji)
 	}
-	if !strings.Contains(out, "spaces/AAA/messages/msg1/reactions/r1") {
-		t.Fatalf("unexpected output: %q", out)
+	if !strings.Contains(result.stdout, "spaces/AAA/messages/msg1/reactions/r1") {
+		t.Fatalf("unexpected output: %q", result.stdout)
+	}
+}
+
+func TestExecute_ChatMessagesReactionsDelete_InvalidResourceFailsBeforeDryRun(t *testing.T) {
+	testCases := [][]string{
+		{"--account", "a@b.com", "--dry-run", "chat", "messages", "reactions", "delete", "nope"},
+		{"--account", "a@b.com", "--dry-run", "chat", "messages", "reactions", "delete", "spaces/AAA/messages/msg1"},
+		{"--account", "a@b.com", "--dry-run", "chat", "messages", "reactions", "delete", "spaces/AAA/messages/msg1/reactions/"},
+	}
+	for _, args := range testCases {
+		t.Run(strings.Join(args[4:], "_"), func(t *testing.T) {
+			result := executeWithChatTestServiceFactory(
+				t,
+				args,
+				unexpectedChatTestService(t, "expected validation to fail before creating chat service"),
+			)
+			var exitErr *ExitError
+			if !errors.As(result.err, &exitErr) || exitErr.Code != 2 || !strings.Contains(result.err.Error(), "required: reaction resource") {
+				t.Fatalf("unexpected err: %v", result.err)
+			}
+		})
 	}
 }
 
 func TestExecute_ChatMessagesReactionsCreate_ConsumerBlocked(t *testing.T) {
-	origNew := newChatService
-	t.Cleanup(func() { newChatService = origNew })
-	newChatService = func(context.Context, string) (*chat.Service, error) {
-		t.Fatalf("unexpected chat service call")
-		return nil, errUnexpectedChatServiceCall
-	}
-
-	err := Execute([]string{"--account", "user@gmail.com", "chat", "messages", "reactions", "create", "spaces/AAA/messages/msg1", "📦"})
+	result := executeWithChatTestServiceFactory(
+		t,
+		[]string{"--account", "user@gmail.com", "chat", "messages", "reactions", "create", "spaces/AAA/messages/msg1", "📦"},
+		unexpectedChatTestService(t, "unexpected chat service call"),
+	)
+	err := result.err
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -237,10 +349,7 @@ func TestExecute_ChatMessagesReactionsCreate_ConsumerBlocked(t *testing.T) {
 }
 
 func TestExecute_ChatMessagesReactionsList_JSON(t *testing.T) {
-	origNew := newChatService
-	t.Cleanup(func() { newChatService = origNew })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	svc := newChatTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/reactions")) {
 			http.NotFound(w, r)
 			return
@@ -257,25 +366,10 @@ func TestExecute_ChatMessagesReactionsList_JSON(t *testing.T) {
 			"nextPageToken": "",
 		})
 	}))
-	defer srv.Close()
-
-	svc, err := chat.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	result := executeWithChatTestService(t, []string{"--json", "--account", "a@b.com", "chat", "messages", "reactions", "list", "spaces/AAA/messages/msg1"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newChatService = func(context.Context, string) (*chat.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--account", "a@b.com", "chat", "messages", "reactions", "list", "spaces/AAA/messages/msg1"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
 
 	var parsed struct {
 		Reactions []struct {
@@ -284,7 +378,7 @@ func TestExecute_ChatMessagesReactionsList_JSON(t *testing.T) {
 			User     string `json:"user"`
 		} `json:"reactions"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(parsed.Reactions) != 1 || parsed.Reactions[0].Emoji != "📦" || parsed.Reactions[0].User != "Ada" {
@@ -292,12 +386,28 @@ func TestExecute_ChatMessagesReactionsList_JSON(t *testing.T) {
 	}
 }
 
-func TestExecute_ChatMessagesReactionsDelete_Text(t *testing.T) {
-	origNew := newChatService
-	t.Cleanup(func() { newChatService = origNew })
+func TestExecute_ChatMessagesReactionsList_InvalidMaxFailsBeforeWorkspaceCheck(t *testing.T) {
+	for _, args := range [][]string{
+		{"--account", "user@gmail.com", "chat", "messages", "reactions", "list", "spaces/AAA/messages/msg1", "--max", "0"},
+		{"--account", "user@gmail.com", "chat", "messages", "reactions", "list", "spaces/AAA/messages/msg1", "--max=-1"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			result := executeWithChatTestServiceFactory(
+				t,
+				args,
+				unexpectedChatTestService(t, "expected max validation to fail before creating chat service"),
+			)
+			err := result.err
+			if ExitCode(err) != 2 || !strings.Contains(err.Error(), "max must be > 0") {
+				t.Fatalf("unexpected err: %v", err)
+			}
+		})
+	}
+}
 
+func TestExecute_ChatMessagesReactionsDelete_Text(t *testing.T) {
 	var deletedPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	svc := newChatTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/reactions/")) {
 			http.NotFound(w, r)
 			return
@@ -306,30 +416,15 @@ func TestExecute_ChatMessagesReactionsDelete_Text(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	}))
-	defer srv.Close()
-
-	svc, err := chat.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	result := executeWithChatTestService(t, []string{"--account", "a@b.com", "chat", "messages", "reactions", "delete", "spaces/AAA/messages/msg1/reactions/r1"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newChatService = func(context.Context, string) (*chat.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--account", "a@b.com", "chat", "messages", "reactions", "delete", "spaces/AAA/messages/msg1/reactions/r1"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
 
 	if !strings.Contains(deletedPath, "/reactions/r1") {
 		t.Fatalf("unexpected delete path: %q", deletedPath)
 	}
-	if !strings.Contains(out, "spaces/AAA/messages/msg1/reactions/r1") {
-		t.Fatalf("unexpected output: %q", out)
+	if !strings.Contains(result.stdout, "spaces/AAA/messages/msg1/reactions/r1") {
+		t.Fatalf("unexpected output: %q", result.stdout)
 	}
 }

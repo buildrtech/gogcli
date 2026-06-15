@@ -1,14 +1,18 @@
 package config
 
+import "errors"
+
 type aliasMapField func(*File) *map[string]string
 
-func resolveAliasValue(alias string, normalizeAlias func(string) string, field aliasMapField) (string, bool, error) {
+var errAliasNotFound = errors.New("alias not found")
+
+func (s *ConfigStore) resolveAliasValue(alias string, normalizeAlias func(string) string, field aliasMapField) (string, bool, error) {
 	alias = normalizeAlias(alias)
 	if alias == "" {
 		return "", false, nil
 	}
 
-	cfg, err := ReadConfig()
+	cfg, err := s.Read()
 	if err != nil {
 		return "", false, err
 	}
@@ -23,7 +27,7 @@ func resolveAliasValue(alias string, normalizeAlias func(string) string, field a
 	return value, ok, nil
 }
 
-func setAliasValue(alias, value string, normalizeAlias func(string) string, normalizeValue func(string) string, validate func(string, string) error, field aliasMapField) error {
+func (s *ConfigStore) setAliasValue(alias, value string, normalizeAlias func(string) string, normalizeValue func(string) string, validate func(string, string) error, field aliasMapField) error {
 	alias = normalizeAlias(alias)
 	value = normalizeValue(value)
 
@@ -31,7 +35,7 @@ func setAliasValue(alias, value string, normalizeAlias func(string) string, norm
 		return err
 	}
 
-	return UpdateConfig(func(cfg *File) error {
+	return s.Update(func(cfg *File) error {
 		aliases := field(cfg)
 		if *aliases == nil {
 			*aliases = map[string]string{}
@@ -43,18 +47,18 @@ func setAliasValue(alias, value string, normalizeAlias func(string) string, norm
 	})
 }
 
-func deleteAliasValue(alias string, normalizeAlias func(string) string, field aliasMapField) (bool, error) {
+func (s *ConfigStore) deleteAliasValue(alias string, normalizeAlias func(string) string, field aliasMapField) (bool, error) {
 	alias = normalizeAlias(alias)
 
 	deleted := false
-	err := UpdateConfig(func(cfg *File) error {
+	err := s.Update(func(cfg *File) error {
 		aliases := field(cfg)
 		if *aliases == nil {
-			return nil
+			return errAliasNotFound
 		}
 
 		if _, ok := (*aliases)[alias]; !ok {
-			return nil
+			return errAliasNotFound
 		}
 
 		delete(*aliases, alias)
@@ -63,11 +67,15 @@ func deleteAliasValue(alias string, normalizeAlias func(string) string, field al
 		return nil
 	})
 
+	if errors.Is(err, errAliasNotFound) {
+		return false, nil
+	}
+
 	return deleted, err
 }
 
-func listAliasValues(field aliasMapField) (map[string]string, error) {
-	cfg, err := ReadConfig()
+func (s *ConfigStore) listAliasValues(field aliasMapField) (map[string]string, error) {
+	cfg, err := s.Read()
 	if err != nil {
 		return nil, err
 	}

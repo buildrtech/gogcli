@@ -68,7 +68,7 @@ func (c *SheetsUpdateNoteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (c *SheetsUpdateNoteCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"spreadsheetId": spreadsheetID,
 			"range":         rangeSpec,
 			"cellsUpdated":  cellCount,
@@ -120,9 +120,9 @@ func (c *SheetsUpdateNoteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		action = "Cleared"
 	}
 	if cellCount == 1 {
-		u.Out().Printf("%s note on %s", action, rangeSpec)
+		u.Out().Linef("%s note on %s", action, rangeSpec)
 	} else {
-		u.Out().Printf("%s note on %d cells in %s", action, cellCount, rangeSpec)
+		u.Out().Linef("%s note on %d cells in %s", action, cellCount, rangeSpec)
 	}
 	return nil
 }

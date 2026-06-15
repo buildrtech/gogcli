@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -28,7 +27,7 @@ type AuthAddCmd struct {
 	AuthCode     string        `name:"auth-code" hidden:"" help:"UNSAFE: Authorization code from browser (manual flow; skips state check; not valid with --remote)"`
 	Timeout      time.Duration `name:"timeout" help:"Authorization timeout (manual flows default to 5m)"`
 	ForceConsent bool          `name:"force-consent" help:"Force consent screen to obtain a refresh token"`
-	ServicesCSV  string        `name:"services" help:"Services to authorize: user|all or comma-separated ${auth_services} (Keep uses service account: gog auth service-account set)" default:"user"`
+	ServicesCSV  string        `name:"services" help:"Services to authorize: user|all-user or comma-separated ${auth_services}; explicit opt-in: photospicker; all means all default user OAuth services. Workspace service-account-only services: admin, groups, keep" default:"user"`
 	Readonly     bool          `name:"readonly" help:"Use read-only scopes where available (still includes OIDC identity scopes)"`
 	DriveScope   string        `name:"drive-scope" help:"Drive scope mode: full|readonly|file" enum:"full,readonly,file" default:"full"`
 	GmailScope   string        `name:"gmail-scope" help:"Gmail scope mode: full|readonly" enum:"full,readonly" default:"full"`
@@ -98,7 +97,7 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
 
 	override := authclient.ClientOverrideFromContext(ctx)
-	client, err := authclient.ResolveClientWithOverride(c.Email, override)
+	client, err := authclient.ResolveClientWithOverride(ctx, c.Email, override)
 	if err != nil {
 		return err
 	}
@@ -165,7 +164,7 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 			if authURL != "" || authCode != "" {
 				return usage("remote step 1 does not accept --auth-url or --auth-code")
 			}
-			result, manualErr := manualAuthURL(ctx, googleauth.AuthorizeOptions{
+			result, manualErr := buildManualAuthURL(ctx, googleauth.AuthorizeOptions{
 				Services:                    services,
 				Scopes:                      scopes,
 				Manual:                      true,
@@ -178,14 +177,14 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 				return manualErr
 			}
 			if outfmt.IsJSON(ctx) {
-				return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+				return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 					"auth_url":     result.URL,
 					"state_reused": result.StateReused,
 				})
 			}
-			u.Out().Printf("auth_url\t%s", result.URL)
-			u.Out().Printf("state_reused\t%t", result.StateReused)
-			u.Err().Printf("Run again with the same root flags and %s\n", formatRemoteStep2Instruction(services, c))
+			u.Out().Linef("auth_url\t%s", result.URL)
+			u.Out().Linef("state_reused\t%t", result.StateReused)
+			u.Err().Linef("Run again with the same root flags and %s", formatRemoteStep2Instruction(services, c))
 			return nil
 		case 2:
 			if authCode != "" {
@@ -222,11 +221,11 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return dryRunErr
 	}
 
-	if keychainErr := ensureKeychainAccessIfNeeded(); keychainErr != nil {
+	if keychainErr := ensureKeychainAccessIfNeeded(ctx); keychainErr != nil {
 		return fmt.Errorf("keychain access: %w", keychainErr)
 	}
 
-	refreshToken, err := authorizeGoogle(ctx, googleauth.AuthorizeOptions{
+	refreshToken, err := authorizeGoogleAccount(ctx, googleauth.AuthorizeOptions{
 		Services:                    services,
 		Scopes:                      scopes,
 		Manual:                      manual,
@@ -244,17 +243,18 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	authorizedEmail, err := fetchAuthorizedEmail(ctx, client, refreshToken, scopes, 15*time.Second)
+	identity, err := fetchAuthIdentity(ctx, client, refreshToken, scopes, 15*time.Second)
 	if err != nil {
 		return fmt.Errorf("fetch authorized email: %w", err)
 	}
+	authorizedEmail := identity.Email
 	if normalizeEmail(authorizedEmail) != normalizeEmail(c.Email) {
 		return fmt.Errorf("authorized as %s, expected %s", authorizedEmail, c.Email)
 	}
 
-	store, err := openSecretsStore()
+	store, err := openAuthSecretsStore(ctx)
 	if err != nil {
-		return err
+		return wrapAuthAddStoreError(err)
 	}
 	serviceNames := make([]string, 0, len(services))
 	for _, svc := range services {
@@ -262,37 +262,66 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 	sort.Strings(serviceNames)
 
+	migratedEmail, err := googleauth.FindStoredSubjectIdentityEmail(store, client, identity)
+	if err != nil {
+		return wrapAuthAddStoreError(err)
+	}
+
 	if err := store.SetToken(client, authorizedEmail, secrets.Token{
 		Client:       client,
+		Subject:      identity.Subject,
 		Email:        authorizedEmail,
 		Services:     serviceNames,
 		Scopes:       scopes,
 		RefreshToken: refreshToken,
 	}); err != nil {
-		return err
+		return wrapAuthAddStoreError(err)
+	}
+	if migratedEmail != "" {
+		if err := googleauth.MigrateStoredEmailReferences(store, func(oldEmail, newEmail string) error {
+			return authclient.UpdateEmailReferences(ctx, oldEmail, newEmail)
+		}, client, migratedEmail, authorizedEmail); err != nil {
+			return wrapAuthAddStoreError(err)
+		}
+		if err := googleauth.DeleteStoredEmailAlias(store, client, migratedEmail); err != nil {
+			u.Err().Linef("Warning: failed to remove stale auth account %s: %v", migratedEmail, err)
+		}
+		u.Err().Linef("Migrated auth account from %s to %s", migratedEmail, authorizedEmail)
 	}
 	if override != "" {
-		cfg, err := config.ReadConfig()
+		configStore, err := commandConfigStore(ctx)
+		if err != nil {
+			return err
+		}
+		cfg, err := configStore.Read()
 		if err != nil {
 			return err
 		}
 		if err := config.SetAccountClient(&cfg, authorizedEmail, client); err != nil {
 			return err
 		}
-		if err := config.WriteConfig(cfg); err != nil {
+		if err := configStore.Write(cfg); err != nil {
 			return err
 		}
 	}
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"stored":   true,
 			"email":    authorizedEmail,
 			"services": serviceNames,
 			"client":   client,
 		})
 	}
-	u.Out().Printf("email\t%s", authorizedEmail)
-	u.Out().Printf("services\t%s", strings.Join(serviceNames, ","))
-	u.Out().Printf("client\t%s", client)
+	u.Out().Linef("email\t%s", authorizedEmail)
+	u.Out().Linef("services\t%s", strings.Join(serviceNames, ","))
+	u.Out().Linef("client\t%s", client)
 	return nil
+}
+
+func wrapAuthAddStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("OAuth completed, but saving the refresh token failed: %w", err)
 }

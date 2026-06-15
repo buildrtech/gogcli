@@ -10,21 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steipete/gogcli/internal/app"
+	"github.com/steipete/gogcli/internal/authclient"
 	"github.com/steipete/gogcli/internal/config"
 	"github.com/steipete/gogcli/internal/secrets"
 )
 
 func TestAuthTokensExportImport_JSON(t *testing.T) {
-	origOpen := openSecretsStore
-	origEnsure := ensureKeychainAccess
-	t.Cleanup(func() {
-		openSecretsStore = origOpen
-		ensureKeychainAccess = origEnsure
-	})
-
 	store := newMemStore()
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
-	ensureKeychainAccess = func() error { return nil }
 
 	tok := secrets.Token{
 		Email:        "a@b.com",
@@ -38,7 +31,13 @@ func TestAuthTokensExportImport_JSON(t *testing.T) {
 	}
 
 	outPath := filepath.Join(t.TempDir(), "token.json")
-	ctx := newCmdJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withAuthOperations(
+		newCmdJSONOutputContext(t, os.Stdout, os.Stderr),
+		app.AuthOperations{
+			OpenSecretsStore:     func() (secrets.Store, error) { return store, nil },
+			EnsureKeychainAccess: func(context.Context) error { return nil },
+		},
+	)
 	var err error
 
 	exportCmd := AuthTokensExportCmd{
@@ -66,7 +65,10 @@ func TestAuthTokensExportImport_JSON(t *testing.T) {
 
 	// Import back into a fresh store.
 	newStore := newMemStore()
-	openSecretsStore = func() (secrets.Store, error) { return newStore, nil }
+	ctx = withAuthOperations(ctx, app.AuthOperations{
+		OpenSecretsStore:     func() (secrets.Store, error) { return newStore, nil },
+		EnsureKeychainAccess: func(context.Context) error { return nil },
+	})
 
 	importCmd := AuthTokensImportCmd{InPath: outPath}
 	err = importCmd.Run(ctx, &RootFlags{})
@@ -82,25 +84,52 @@ func TestAuthTokensExportImport_JSON(t *testing.T) {
 	}
 }
 
-func TestAuthList_CheckJSON(t *testing.T) {
-	origOpen := openSecretsStore
-	origCheck := checkRefreshToken
-	t.Cleanup(func() {
-		openSecretsStore = origOpen
-		checkRefreshToken = origCheck
-	})
-
-	store := newMemStore()
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
-	checkRefreshToken = func(context.Context, string, string, []string, time.Duration) error {
-		return nil
+func TestAuthTokensExportUsesNoMigrateGetter(t *testing.T) {
+	store := &noMigrateExportStore{memStore: newMemStore()}
+	if err := store.SetToken(config.DefaultClientName, "a@b.com", secrets.Token{
+		Email:        "a@b.com",
+		RefreshToken: "rt",
+	}); err != nil {
+		t.Fatalf("SetToken: %v", err)
 	}
+
+	outPath := filepath.Join(t.TempDir(), "token.json")
+	ctx := authclient.WithClient(
+		withAuthStore(newCmdJSONOutputContext(t, os.Stdout, os.Stderr), store),
+		config.DefaultClientName,
+	)
+
+	err := (&AuthTokensExportCmd{
+		Email:     "a@b.com",
+		Output:    OutputPathRequiredFlag{Path: outPath},
+		Overwrite: true,
+	}).Run(ctx, &RootFlags{})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	if store.noMigrateCalls != 1 {
+		t.Fatalf("expected one GetTokenNoMigrate call, got %d", store.noMigrateCalls)
+	}
+
+	if store.getTokenCalls != 0 {
+		t.Fatalf("expected export to skip GetToken, got %d calls", store.getTokenCalls)
+	}
+}
+
+func TestAuthList_CheckJSON(t *testing.T) {
+	store := newMemStore()
 
 	if err := store.SetToken(config.DefaultClientName, "a@b.com", secrets.Token{Email: "a@b.com", RefreshToken: "rt"}); err != nil {
 		t.Fatalf("SetToken: %v", err)
 	}
 
-	ctx := newCmdJSONOutputContext(t, os.Stdout, os.Stderr)
+	ctx := withTestRuntime(newCmdJSONOutputContext(t, os.Stdout, os.Stderr), func(runtime *app.Runtime) {
+		runtime.Auth.OpenSecretsStore = func() (secrets.Store, error) { return store, nil }
+		runtime.Auth.CheckRefreshToken = func(context.Context, string, string, []string, time.Duration) error {
+			return nil
+		}
+	})
 	var err error
 
 	listCmd := AuthListCmd{Check: true}
@@ -122,6 +151,71 @@ func TestAuthList_CheckJSON(t *testing.T) {
 	}
 	if len(payload.Accounts) != 1 || payload.Accounts[0].Email != "a@b.com" || payload.Accounts[0].Valid == nil || !*payload.Accounts[0].Valid {
 		t.Fatalf("unexpected list payload: %#v", payload.Accounts)
+	}
+}
+
+func TestAuthList_JSON_DoesNotCollapseSameEmailAcrossClients(t *testing.T) {
+	store := newMemStore()
+
+	for _, client := range []string{"compose", "inbox", "ro", "rw"} {
+		if err := store.SetToken(client, "user@example.com", secrets.Token{
+			Email:        "user@example.com",
+			RefreshToken: "rt-" + client,
+			Services:     []string{client},
+		}); err != nil {
+			t.Fatalf("SetToken(%s): %v", client, err)
+		}
+	}
+
+	ctx := withAuthStore(newCmdJSONOutputContext(t, os.Stdout, os.Stderr), store)
+	listCmd := AuthListCmd{}
+	out := captureStdout(t, func() {
+		runErr := listCmd.Run(ctx, &RootFlags{})
+		if runErr != nil {
+			t.Fatalf("list: %v", runErr)
+		}
+	})
+
+	var payload struct {
+		Accounts []struct {
+			Email  string   `json:"email"`
+			Client string   `json:"client"`
+			Auth   string   `json:"auth"`
+			Scopes []string `json:"scopes"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("decode list output: %v\n%s", err, out)
+	}
+	if len(payload.Accounts) != 4 {
+		t.Fatalf("accounts=%#v, want one row per client", payload.Accounts)
+	}
+
+	gotClients := make([]string, 0, len(payload.Accounts))
+	for _, account := range payload.Accounts {
+		if account.Email != "user@example.com" || account.Auth != authTypeOAuth {
+			t.Fatalf("unexpected account row: %#v", account)
+		}
+		gotClients = append(gotClients, account.Client)
+	}
+	wantClients := []string{"compose", "inbox", "ro", "rw"}
+	if strings.Join(gotClients, ",") != strings.Join(wantClients, ",") {
+		t.Fatalf("clients=%v, want %v", gotClients, wantClients)
+	}
+
+	filteredOut := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := executeWithRuntime([]string{"--json", "--client", "ro", "auth", "list"}, runtimeWithAuthStore(store)); err != nil {
+				t.Fatalf("Execute filtered list: %v", err)
+			}
+		})
+	})
+	payload.Accounts = nil
+	if err := json.Unmarshal([]byte(filteredOut), &payload); err != nil {
+		t.Fatalf("decode filtered list output: %v\n%s", err, filteredOut)
+	}
+	if len(payload.Accounts) != 1 || payload.Accounts[0].Client != "ro" || payload.Accounts[0].Email != "user@example.com" {
+		t.Fatalf("filtered accounts=%#v, want only ro", payload.Accounts)
 	}
 }
 
@@ -196,4 +290,22 @@ func (m *memStore) GetDefaultAccount(client string) (string, error) {
 func (m *memStore) SetDefaultAccount(client string, email string) error {
 	m.defaultEmail = email
 	return nil
+}
+
+type noMigrateExportStore struct {
+	*memStore
+	noMigrateCalls int
+	getTokenCalls  int
+}
+
+func (m *noMigrateExportStore) GetToken(client string, email string) (secrets.Token, error) {
+	m.getTokenCalls++
+
+	return m.memStore.GetToken(client, email)
+}
+
+func (m *noMigrateExportStore) GetTokenNoMigrate(client string, email string) (secrets.Token, error) {
+	m.noMigrateCalls++
+
+	return m.memStore.GetToken(client, email)
 }

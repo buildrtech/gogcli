@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"os"
 
 	"google.golang.org/api/calendar/v3"
 
@@ -57,7 +56,28 @@ func (m *calendarMutationContext) patchEvent(ctx context.Context, eventID string
 	if sendUpdates != "" {
 		call = call.SendUpdates(sendUpdates)
 	}
+	if patchHasConferenceDataMutation(patch) {
+		call = call.ConferenceDataVersion(1)
+	}
+	if patchHasAttachmentsMutation(patch) {
+		call = call.SupportsAttachments(true)
+	}
 	return call.Do()
+}
+
+func patchHasAttachmentsMutation(patch *calendar.Event) bool {
+	if patch == nil {
+		return false
+	}
+	if len(patch.Attachments) > 0 {
+		return true
+	}
+	for _, field := range patch.ForceSendFields {
+		if field == "Attachments" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *calendarMutationContext) deleteEvent(ctx context.Context, eventID, sendUpdates string) error {
@@ -68,10 +88,19 @@ func (m *calendarMutationContext) deleteEvent(ctx context.Context, eventID, send
 	return call.Do()
 }
 
+func (m *calendarMutationContext) moveEvent(ctx context.Context, eventID, destinationCalendarID, sendUpdates string) (*calendar.Event, error) {
+	call := m.svc.Events.Move(m.calendarID, eventID, destinationCalendarID).Context(ctx)
+	if sendUpdates != "" {
+		call = call.SendUpdates(sendUpdates)
+	}
+	return call.Do()
+}
+
 func (m *calendarMutationContext) writeEvent(ctx context.Context, event *calendar.Event) error {
+	redactCalendarEventForOutput(ctx, event)
 	tz, loc, _ := getCalendarLocation(ctx, m.svc, m.calendarID)
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"event": wrapEventWithDaysWithTimezone(event, tz, loc)})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"event": wrapEventWithDaysWithTimezone(event, tz, loc)})
 	}
 	printCalendarEventWithTimezone(m.u, event, tz, loc)
 	return nil

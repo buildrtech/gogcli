@@ -1,17 +1,14 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"os"
+	"errors"
 	"strings"
 
 	"google.golang.org/api/sheets/v4"
 
 	"github.com/steipete/gogcli/internal/outfmt"
+	"github.com/steipete/gogcli/internal/sheetsformat"
 	"github.com/steipete/gogcli/internal/ui"
 )
 
@@ -33,33 +30,38 @@ func (c *SheetsFormatCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty range")
 	}
 	if strings.TrimSpace(c.FormatJSON) == "" {
-		return fmt.Errorf("provide format JSON via --format-json")
-	}
-	formatFields := strings.TrimSpace(c.FormatFields)
-	if formatFields == "" {
-		return fmt.Errorf("provide format fields via --format-fields")
+		return usage("provide format JSON via --format-json")
 	}
 
-	if hasBoardersTypo(formatFields) {
-		return fmt.Errorf(`invalid --format-fields: found "boarders"; use "borders"`)
-	}
-
-	var err error
 	var format sheets.CellFormat
-	b, err := resolveInlineOrFileBytes(c.FormatJSON)
+	b, err := resolveInlineOrFileBytes(c.FormatJSON, stdinReader(ctx))
 	if err != nil {
-		return fmt.Errorf("read --format-json: %w", err)
+		return usagef("read --format-json: %v", err)
 	}
-	if err = decodeCellFormatJSON(b, &format); err != nil {
-		return fmt.Errorf("invalid format JSON: %w", err)
+	if err = sheetsformat.Decode(b, &format); err != nil {
+		return usagef("invalid format JSON: %v", err)
 	}
 
-	normalizedFields, formatJSONPaths := normalizeFormatMask(formatFields)
-	if normalizedFields != "" {
-		formatFields = normalizedFields
+	formatFields := strings.TrimSpace(c.FormatFields)
+	var formatJSONPaths []string
+	if formatFields == "" {
+		var inferErr error
+		formatFields, formatJSONPaths, inferErr = sheetsformat.InferMask(b)
+		if inferErr != nil {
+			return sheetsFormatInputError(inferErr)
+		}
+	} else {
+		if sheetsformat.HasBordersTypo(formatFields) {
+			return usage(`invalid --format-fields: found "boarders"; use "borders"`)
+		}
+		normalizedFields, paths := sheetsformat.NormalizeMask(formatFields)
+		if normalizedFields != "" {
+			formatFields = normalizedFields
+		}
+		formatJSONPaths = paths
 	}
-	if err = applyForceSendFields(&format, formatJSONPaths); err != nil {
-		return err
+	if err = sheetsformat.ApplyForceSendFields(&format, formatJSONPaths); err != nil {
+		return usage(err.Error())
 	}
 
 	if dryRunErr := dryRunExit(ctx, flags, "sheets.format", map[string]any{
@@ -76,7 +78,7 @@ func (c *SheetsFormatCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newSheetsService(ctx, account)
+	svc, err := sheetsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -109,44 +111,20 @@ func (c *SheetsFormatCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"range":  rangeSpec,
 			"fields": formatFields,
 		})
 	}
 
-	u.Out().Printf("Formatted %s", rangeSpec)
+	u.Out().Linef("Formatted %s", rangeSpec)
 	return nil
 }
 
-func decodeCellFormatJSON(data []byte, dst *sheets.CellFormat) error {
-	if dst == nil {
-		return fmt.Errorf("format is required")
+func sheetsFormatInputError(err error) error {
+	var validationErr sheetsformat.ValidationError
+	if errors.As(err, &validationErr) {
+		return usage(validationErr.Error())
 	}
-
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func hasBoardersTypo(mask string) bool {
-	for _, part := range splitFieldMask(mask) {
-		for _, token := range strings.Split(part, ".") {
-			if strings.EqualFold(strings.TrimSpace(token), "boarders") {
-				return true
-			}
-		}
-	}
-	return false
+	return err
 }

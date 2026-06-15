@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steipete/gogcli/internal/app"
 	"github.com/steipete/gogcli/internal/config"
 	"github.com/steipete/gogcli/internal/googleauth"
 )
@@ -47,17 +48,16 @@ func TestAuthKeepCmd_JSON(t *testing.T) {
 }
 
 func TestAuthManageCmd(t *testing.T) {
-	orig := startManageServer
-	t.Cleanup(func() { startManageServer = orig })
-
 	var captured googleauth.ManageServerOptions
-	startManageServer = func(_ context.Context, opts googleauth.ManageServerOptions) error {
-		captured = opts
-		return nil
-	}
+	ctx := withTestRuntime(context.Background(), func(runtime *app.Runtime) {
+		runtime.Auth.StartManageServer = func(_ context.Context, opts googleauth.ManageServerOptions) error {
+			captured = opts
+			return nil
+		}
+	})
 
 	cmd := AuthManageCmd{ServicesCSV: "gmail,calendar", ForceConsent: true}
-	if err := cmd.Run(context.Background(), &RootFlags{}); err != nil {
+	if err := cmd.Run(ctx, &RootFlags{}); err != nil {
 		t.Fatalf("AuthManageCmd: %v", err)
 	}
 	if !captured.ForceConsent || len(captured.Services) != 2 {
@@ -137,10 +137,6 @@ func TestAuthStatusCmd_JSON(t *testing.T) {
 
 	ctx := newCmdJSONOutputContext(t, os.Stdout, os.Stderr)
 
-	if _, err := config.ConfigPath(); err != nil {
-		t.Fatalf("ConfigPath: %v", err)
-	}
-
 	cmd := AuthStatusCmd{}
 	out := captureStdout(t, func() {
 		if err := cmd.Run(ctx, &RootFlags{}); err != nil {
@@ -149,5 +145,47 @@ func TestAuthStatusCmd_JSON(t *testing.T) {
 	})
 	if !strings.Contains(out, "\"keyring\"") || !strings.Contains(out, "\"config\"") {
 		t.Fatalf("unexpected status output: %q", out)
+	}
+}
+
+func TestAuthStatusCmd_JSONReportsLegacyCredentialsPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data"))
+
+	legacyPath, err := defaultLayoutForTest(t, config.PathKindConfig).
+		LegacyClientCredentialsPathFor(config.DefaultClientName)
+	if err != nil {
+		t.Fatalf("LegacyClientCredentialsPathFor: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatalf("mkdir legacy: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"client_id":"legacy","client_secret":"secret"}`), 0o600); err != nil {
+		t.Fatalf("write legacy credentials: %v", err)
+	}
+
+	cmd := AuthStatusCmd{}
+	out := captureStdout(t, func() {
+		if err := cmd.Run(newCmdJSONOutputContext(t, os.Stdout, os.Stderr), &RootFlags{Account: "user@example.com"}); err != nil {
+			t.Fatalf("AuthStatusCmd: %v", err)
+		}
+	})
+
+	var payload struct {
+		Account struct {
+			CredentialsPath   string `json:"credentials_path"`
+			CredentialsExists bool   `json:"credentials_exists"`
+		} `json:"account"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !payload.Account.CredentialsExists {
+		t.Fatalf("expected credentials_exists=true, payload=%s", out)
+	}
+	if payload.Account.CredentialsPath != legacyPath {
+		t.Fatalf("credentials_path=%q, want %q", payload.Account.CredentialsPath, legacyPath)
 	}
 }
