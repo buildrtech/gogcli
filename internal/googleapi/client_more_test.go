@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -947,6 +948,92 @@ func TestOptionsForAccountScopes_ADCMode(t *testing.T) {
 
 	if len(opts) == 0 {
 		t.Fatalf("expected client options")
+	}
+}
+
+func TestNewGoogleAPITransport_RoutesAllowedGoogleAPIThroughBuildrProxy(t *testing.T) {
+	var sawRequest bool
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+
+		if r.URL.Path != "/prod/calendar/v3/colors" {
+			t.Fatalf("proxy path = %q, want %q", r.URL.Path, "/prod/calendar/v3/colors")
+		}
+		if r.URL.RawQuery != "prettyPrint=false" {
+			t.Fatalf("proxy query = %q, want %q", r.URL.RawQuery, "prettyPrint=false")
+		}
+		if got := r.Header.Get("X-Google-Upstream-Host"); got != "calendar-json.googleapis.com" {
+			t.Fatalf("upstream host header = %q", got)
+		}
+		if got := r.Header.Get("X-Google-Authorization"); got != "Bearer access-token" {
+			t.Fatalf("google auth header = %q", got)
+		}
+		if got := r.Header.Get("X-Client-Name"); got != "gog" {
+			t.Fatalf("client name header = %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("authorization header leaked to proxy: %q", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer proxy.Close()
+
+	t.Setenv("GOOGLE_API_PROXY_URL", proxy.URL+"/prod")
+
+	client := &http.Client{Transport: &oauth2.Transport{
+		Source: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "access-token"}),
+		Base:   newGoogleAPITransport(proxy.Client().Transport),
+	}}
+
+	resp, err := client.Get("https://calendar-json.googleapis.com/calendar/v3/colors?prettyPrint=false")
+	if err != nil {
+		t.Fatalf("get through proxy: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if !sawRequest {
+		t.Fatalf("expected proxy to receive request")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestNewGoogleAPITransport_LeavesOAuthTokenHostDirect(t *testing.T) {
+	t.Setenv("GOOGLE_API_PROXY_URL", "https://proxy.example.com/prod")
+
+	var sawDirectRequest bool
+	transport := newGoogleAPITransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		sawDirectRequest = true
+
+		if got := req.URL.Host; got != "oauth2.googleapis.com" {
+			t.Fatalf("host = %q, want %q", got, "oauth2.googleapis.com")
+		}
+		if got := req.URL.Path; got != "/token" {
+			t.Fatalf("path = %q, want %q", got, "/token")
+		}
+		if got := req.Header.Get("X-Google-Upstream-Host"); got != "" {
+			t.Fatalf("unexpected upstream host header: %q", got)
+		}
+
+		return newTestResponse(http.StatusOK, `{"ok":true}`), nil
+	}))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oauth2.googleapis.com/token", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if !sawDirectRequest {
+		t.Fatalf("expected direct base transport to receive request")
 	}
 }
 

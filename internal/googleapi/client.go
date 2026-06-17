@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -27,7 +30,28 @@ const (
 	// tokenExchangeTimeout is applied to the short-lived HTTP client used
 	// for OAuth2 token refresh exchanges, which should always be fast.
 	tokenExchangeTimeout = 30 * time.Second
+
+	buildrGoogleAPIProxyEnv = "GOOGLE_API_PROXY_URL"
 )
+
+var buildrGoogleAPIProxyHosts = map[string]bool{
+	"www.googleapis.com":           true,
+	"gmail.googleapis.com":         true,
+	"docs.googleapis.com":          true,
+	"slides.googleapis.com":        true,
+	"people.googleapis.com":        true,
+	"tasks.googleapis.com":         true,
+	"forms.googleapis.com":         true,
+	"drive.googleapis.com":         true,
+	"sheets.googleapis.com":        true,
+	"chat.googleapis.com":          true,
+	"classroom.googleapis.com":     true,
+	"cloudidentity.googleapis.com": true,
+	"admin.googleapis.com":         true,
+	"script.googleapis.com":        true,
+	"keep.googleapis.com":          true,
+	"calendar-json.googleapis.com": true,
+}
 
 func optionsForAccount(ctx context.Context, service googleauth.Service, email string) ([]option.ClientOption, error) {
 	scopes, err := googleauth.Scopes(service)
@@ -150,7 +174,7 @@ func authenticatedTransportWithStoredScopeCheck(
 
 	return NewRetryTransport(&oauth2.Transport{
 		Source: ts,
-		Base:   newBaseTransport(),
+		Base:   newGoogleAPITransport(newBaseTransport()),
 	}), nil
 }
 
@@ -203,7 +227,7 @@ func tokenSourceClientOptions(ts oauth2.TokenSource) []option.ClientOption {
 	return []option.ClientOption{option.WithHTTPClient(&http.Client{
 		Transport: NewRetryTransport(&oauth2.Transport{
 			Source: ts,
-			Base:   newBaseTransport(),
+			Base:   newGoogleAPITransport(newBaseTransport()),
 		}),
 	})}
 }
@@ -277,4 +301,71 @@ func newBaseTransport() *http.Transport {
 	}
 
 	return transport
+}
+
+type buildrGoogleAPIProxyTransport struct {
+	base     http.RoundTripper
+	proxyURL *url.URL
+	err      error
+}
+
+func newGoogleAPITransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	rawProxyURL := strings.TrimSpace(os.Getenv(buildrGoogleAPIProxyEnv))
+	if rawProxyURL == "" {
+		return base
+	}
+
+	proxyURL, err := url.Parse(rawProxyURL)
+	if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+		return &buildrGoogleAPIProxyTransport{
+			base: base,
+			err:  fmt.Errorf("invalid %s: %q", buildrGoogleAPIProxyEnv, rawProxyURL),
+		}
+	}
+
+	return &buildrGoogleAPIProxyTransport{
+		base:     base,
+		proxyURL: proxyURL,
+	}
+}
+
+func (transport *buildrGoogleAPIProxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil || !buildrGoogleAPIProxyHosts[req.URL.Hostname()] {
+		return transport.base.RoundTrip(req)
+	}
+
+	if transport.err != nil {
+		return nil, transport.err
+	}
+
+	proxyReq := req.Clone(req.Context())
+	proxyURL := *transport.proxyURL
+	proxyURL.Path = joinURLPath(transport.proxyURL.Path, req.URL.Path)
+	proxyURL.RawPath = ""
+	proxyURL.RawQuery = req.URL.RawQuery
+	proxyURL.Fragment = ""
+	proxyReq.URL = &proxyURL
+	proxyReq.Host = ""
+	proxyReq.Header = req.Header.Clone()
+	proxyReq.Header.Set("X-Google-Upstream-Host", req.URL.Hostname())
+	proxyReq.Header.Set("X-Google-Authorization", req.Header.Get("Authorization"))
+	proxyReq.Header.Set("X-Client-Name", "gog")
+	proxyReq.Header.Del("Authorization")
+
+	return transport.base.RoundTrip(proxyReq)
+}
+
+func joinURLPath(basePath string, requestPath string) string {
+	basePath = strings.TrimRight(basePath, "/")
+	if requestPath == "" {
+		requestPath = "/"
+	}
+	if strings.HasPrefix(requestPath, "/") {
+		return basePath + requestPath
+	}
+	return basePath + "/" + requestPath
 }
